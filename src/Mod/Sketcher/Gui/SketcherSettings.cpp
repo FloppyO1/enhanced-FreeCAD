@@ -138,6 +138,7 @@ void SketcherSettings::saveSettings()
     ui->checkBoxLineGroup->onSave();
     ui->checkBoxAddExtGeo->onSave();
     ui->checkBoxMakeInternals->onSave();
+    ui->checkBoxSnapToModel->onSave();
 
     enum
     {
@@ -220,6 +221,7 @@ void SketcherSettings::loadSettings()
     setProperty("checkBoxLineGroup", ui->checkBoxLineGroup->isChecked());
     ui->checkBoxAddExtGeo->onRestore();
     ui->checkBoxMakeInternals->onRestore();
+    ui->checkBoxSnapToModel->onRestore();
 
     // Dimensioning constraints mode
     ui->dimensioningMode->clear();

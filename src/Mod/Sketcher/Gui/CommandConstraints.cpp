@@ -1302,8 +1302,12 @@ int findExternalReference(Sketcher::SketchObject* sketch,
 {
     const auto sourceReferences = sketch->ExternalGeometry.getValues();
     const auto subReferences = sketch->ExternalGeometry.getSubValues();
+    const auto oldStyleSubReferences = sketch->ExternalGeometry.getSubValues(/*newStyle*/ false);
     for (size_t index = 0; index < sourceReferences.size(); ++index) {
-        if (sourceReferences[index] == source && subReferences[index] == subName) {
+        if (sourceReferences[index] == source
+            && (subReferences[index] == subName
+                || (index < oldStyleSubReferences.size()
+                    && oldStyleSubReferences[index] == subName))) {
             return GeoEnum::RefExt - static_cast<int>(index);
         }
     }

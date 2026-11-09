@@ -141,6 +141,21 @@ void doEndpointToEdgeTangency(
 /// notifications
 void notifyConstraintSubstitutions(const QString& message);
 
+/// Returns the GeoId of the external geometry linked to source.subName, or GeoUndef
+int findExternalReference(
+    Sketcher::SketchObject* sketch,
+    App::DocumentObject* source,
+    const std::string& subName
+);
+
+/// Imports source.subName as (non defining) external geometry and returns its GeoId, or GeoUndef
+/// NOTE: A command must be opened before calling this function.
+int addProjectedExternalReference(
+    Sketcher::SketchObject* sketch,
+    App::DocumentObject* source,
+    const std::string& subName
+);
+
 std::string escapeForPython(const std::string& input);
 bool addListConstraint(
     Sketcher::SketchObject* Obj,

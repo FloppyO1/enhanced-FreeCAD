@@ -24,7 +24,23 @@
 
 #include <QApplication>
 
+#include <BRepAdaptor_Curve.hxx>
+#include <BRep_Tool.hxx>
+#include <Precision.hxx>
+#include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+
+#include <Inventor/SoPickedPoint.h>
+#include <Inventor/actions/SoRayPickAction.h>
+#include <Inventor/lists/SoPickedPointList.h>
+
+#include <App/Document.h>
+#include <App/GeoFeature.h>
 #include <Base/Tools.h>
+#include <Gui/Document.h>
+#include <Gui/View3DInventorViewer.h>
+#include <Gui/ViewProviderDocumentObject.h>
+#include <Mod/Part/App/PartFeature.h>
 #include <Mod/Sketcher/App/SketchObject.h>
 
 #include "SnapManager.h"
@@ -33,6 +49,26 @@
 
 using namespace SketcherGui;
 using namespace Sketcher;
+
+namespace
+{
+
+/// Distance (relative to the view scale factor) below which the cursor snaps to a circle center
+constexpr double modelCenterSnapScale = 0.2;
+/// Relative distance from the middle of a straight edge below which the cursor snaps to it
+constexpr double modelEdgeMidpointRatio = 0.05;
+
+bool isVertexName(const std::string& element)
+{
+    return element.starts_with("Vertex") && element.size() > 6;
+}
+
+bool isEdgeName(const std::string& element)
+{
+    return element.starts_with("Edge") && element.size() > 4;
+}
+
+}  // namespace
 
 /************************************ Attorney *******************************************/
 
@@ -73,6 +109,7 @@ void SnapManager::ParameterObserver::initParameters()
     str2updatefunction = {
         {"Snap", [this](const std::string& param) { updateSnapParameter(param); }},
         {"SnapToObjects", [this](const std::string& param) { updateSnapToObjectParameter(param); }},
+        {"SnapToModel", [this](const std::string& param) { updateSnapToModelParameter(param); }},
         {"SnapToGrid", [this](const std::string& param) { updateSnapToGridParameter(param); }},
         {"SnapAngle", [this](const std::string& param) { updateSnapAngleParameter(param); }},
     };
@@ -97,6 +134,13 @@ void SnapManager::ParameterObserver::updateSnapToObjectParameter(const std::stri
     ParameterGrp::handle hGrp = getParameterGrpHandle();
 
     client.snapToObjectsRequested = hGrp->GetBool(parametername.c_str(), true);
+}
+
+void SnapManager::ParameterObserver::updateSnapToModelParameter(const std::string& parametername)
+{
+    ParameterGrp::handle hGrp = getParameterGrpHandle();
+
+    client.snapToModelRequested = hGrp->GetBool(parametername.c_str(), true);
 }
 
 void SnapManager::ParameterObserver::updateSnapToGridParameter(const std::string& parametername)
@@ -176,6 +220,8 @@ SnapManager::~SnapManager()
 
 Base::Vector2d SnapManager::snap(Base::Vector2d inputPos, SnapType mask)
 {
+    modelReference = ModelReference();
+
     if (!snapRequested) {
         return inputPos;
     }
@@ -204,6 +250,13 @@ Base::Vector2d SnapManager::snap(Base::Vector2d inputPos, SnapType mask)
             return snapPos;  // Full snap (point or curve) - done
         }
         // if false was returned but snapPos was modified (axis case), continue to grid snap
+
+        // Geometry of the 3D model, only when nothing of the sketch itself is preselected
+        if (snapPos == inputPos && (static_cast<int>(mask) & static_cast<int>(SnapType::Point))
+            && (static_cast<int>(mask) & static_cast<int>(SnapType::Edge))
+            && snapToModel(inputPos, snapPos)) {
+            return snapPos;
+        }
     }
 
     // 3 - Snap to grid (will work on coordinates not already locked by axis snap)
@@ -310,6 +363,228 @@ bool SnapManager::snapToObject(Base::Vector2d inputPos, Base::Vector2d& snapPos,
         }
     }
     return false;
+}
+
+bool SnapManager::snapToModel(Base::Vector2d inputPos, Base::Vector2d& snapPos)
+{
+    // Only while a tool creates geometry: only tools create the matching constraints
+    if (!snapToModelRequested
+        || viewProvider.getSketchMode() != ViewProviderSketch::STATUS_SKETCH_UseHandler) {
+        acquiredCenter = ModelReference();
+        return false;
+    }
+
+    // Anything of the sketch itself under the cursor has precedence
+    if (ViewProviderSketchSnapAttorney::getPreselectPoint(viewProvider) >= 0
+        || ViewProviderSketchSnapAttorney::getPreselectCross(viewProvider) >= 0
+        || ViewProviderSketchSnapAttorney::getPreselectCurve(viewProvider) >= 0
+        || ViewProviderSketchSnapAttorney::getPreselectCurve(viewProvider) <= GeoEnum::RefExt) {
+        return false;
+    }
+
+    Sketcher::SketchObject* sketch = viewProvider.getSketchObject();
+    const Base::Placement inverseSketchPlacement = sketch->Placement.getValue().inverse();
+    auto toSketch = [&inverseSketchPlacement](const gp_Pnt& point) {
+        Base::Vector3d vector(point.X(), point.Y(), point.Z());
+        inverseSketchPlacement.multVec(vector, vector);
+        return Base::Vector2d(vector.x, vector.y);
+    };
+
+    ModelReference result;
+
+    const std::string& element = modelPick.element;
+    App::DocumentObject* object = modelPick.objectName.empty()
+        ? nullptr
+        : sketch->getDocument()->getObject(modelPick.objectName.c_str());
+    if (object && object != sketch && sketch->isExternalAllowed(object->getDocument(), object)) {
+        try {
+            // Same shape and coordinate system as SketchObject::addExternal()
+            const Part::TopoShape shape = Part::Feature::getTopoShape(
+                object,
+                Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform
+            );
+            const Part::TopoShape subShape = shape.getSubTopoShape(element.c_str(), /*silent*/ true);
+
+            result.objectName = object->getNameInDocument();
+            result.subName = element;
+
+            if (!subShape.isNull() && subShape.shapeType(/*silent*/ true) == TopAbs_VERTEX) {
+                result.kind = ModelReference::Kind::Point;
+                result.posId = PointPos::start;
+                result.position = toSketch(BRep_Tool::Pnt(TopoDS::Vertex(subShape.getShape())));
+            }
+            else if (!subShape.isNull() && subShape.shapeType(/*silent*/ true) == TopAbs_EDGE) {
+                BRepAdaptor_Curve curve(TopoDS::Edge(subShape.getShape()));
+
+                Base::Vector3d sketchNormal(0., 0., 1.);
+                sketch->Placement.getValue().getRotation().multVec(sketchNormal, sketchNormal);
+
+                if (curve.GetType() == GeomAbs_Line) {
+                    const Base::Vector2d start = toSketch(curve.Value(curve.FirstParameter()));
+                    const Base::Vector2d end = toSketch(curve.Value(curve.LastParameter()));
+                    const Base::Vector2d direction = end - start;
+                    const double length = direction.Length();
+
+                    if (length < Precision::Confusion()) {
+                        // Edge perpendicular to the sketch: it is projected as a point
+                        result.kind = ModelReference::Kind::Point;
+                        result.posId = PointPos::start;
+                        result.position = start;
+                    }
+                    else {
+                        const double parameter
+                            = std::clamp(((inputPos - start) * direction) / (length * length), 0., 1.);
+                        const Base::Vector2d onEdge = start + direction * parameter;
+                        const Base::Vector2d middle = (start + end) * 0.5;
+
+                        if ((onEdge - middle).Length() < length * modelEdgeMidpointRatio) {
+                            result.kind = ModelReference::Kind::EdgeMidpoint;
+                            result.position = middle;
+                        }
+                        else {
+                            result.kind = ModelReference::Kind::Edge;
+                            result.position = onEdge;
+                        }
+                    }
+                }
+                else if (curve.GetType() == GeomAbs_Circle) {
+                    const gp_Circ circle = curve.Circle();
+                    const gp_Dir& axis = circle.Axis().Direction();
+                    const double cosAngle = axis.X() * sketchNormal.x + axis.Y() * sketchNormal.y
+                        + axis.Z() * sketchNormal.z;
+
+                    // Only circles parallel to the sketch are projected as circles (with a center)
+                    if (std::fabs(std::fabs(cosAngle) - 1.) < Precision::Angular()) {
+                        const Base::Vector2d center = toSketch(circle.Location());
+
+                        acquiredCenter.kind = ModelReference::Kind::Point;
+                        acquiredCenter.objectName = result.objectName;
+                        acquiredCenter.subName = result.subName;
+                        acquiredCenter.position = center;
+                        acquiredCenter.posId = PointPos::mid;
+
+                        Base::Vector2d radial = inputPos - center;
+                        if (radial.Length() > Precision::Confusion()) {
+                            result.kind = ModelReference::Kind::Edge;
+                            result.position = center + radial.Normalize() * circle.Radius();
+                        }
+                    }
+                }
+
+                if (result.kind == ModelReference::Kind::None) {
+                    // Other curves: use the picked point, which lies on the edge
+                    Base::Matrix4D toSketchMatrix = viewProvider.getDocument()->getEditingTransform();
+                    toSketchMatrix.inverseGauss();
+                    const Base::Vector3d picked = toSketchMatrix * modelPick.point;
+
+                    result.kind = ModelReference::Kind::Edge;
+                    result.position = Base::Vector2d(picked.x, picked.y);
+                }
+            }
+        }
+        catch (const Base::Exception&) {
+            result = ModelReference();
+        }
+        catch (const Standard_Failure&) {
+            result = ModelReference();
+        }
+    }
+
+    // The center of the circle hovered last, when the cursor gets close to it
+    if (result.kind != ModelReference::Kind::Point && acquiredCenter.isValid()
+        && (inputPos - acquiredCenter.position).Length()
+            < viewProvider.getScaleFactor() * modelCenterSnapScale) {
+        result = acquiredCenter;
+    }
+
+    if (!result.isValid()) {
+        return false;
+    }
+
+    modelReference = result;
+    snapPos = result.position;
+    return true;
+}
+
+void SnapManager::clearModelPick()
+{
+    modelPick = ModelPick();
+}
+
+void SnapManager::updateModelPick(const SbVec2s& cursorPos, const Gui::View3DInventorViewer* viewer)
+{
+    clearModelPick();
+
+    if (!viewer || !snapRequested || !snapToObjectsRequested || !snapToModelRequested) {
+        return;
+    }
+
+    SoRayPickAction pickAction(viewer->getSoRenderManager()->getViewportRegion());
+    pickAction.setPickAll(true);
+    pickAction.setPoint(cursorPos);
+    pickAction.setRadius(viewer->getPickRadius());
+    pickAction.apply(viewer->getSoRenderManager()->getSceneGraph());
+
+    // Only elements of the first object hit (the visible one) are considered. Among them a
+    // vertex has precedence over an edge, faces are ignored.
+    const App::DocumentObject* firstObject = nullptr;
+    ModelPick edgePick;
+
+    const SoPickedPointList& pickedPoints = pickAction.getPickedPointList();
+    for (int i = 0; i < pickedPoints.getLength(); ++i) {
+        const SoPickedPoint* pickedPoint = pickedPoints[i];
+        if (!pickedPoint || !pickedPoint->getPath()) {
+            continue;
+        }
+
+        Gui::ViewProvider* vp = viewer->getViewProviderByPath(pickedPoint->getPath());
+        if (!vp || vp == &viewProvider || !vp->isDerivedFrom<Gui::ViewProviderDocumentObject>()) {
+            continue;
+        }
+
+        std::string subName;
+        if (!vp->getElementPicked(pickedPoint, subName) || subName.empty()) {
+            continue;
+        }
+
+        App::DocumentObject* object = static_cast<Gui::ViewProviderDocumentObject*>(vp)->getObject();
+        if (!object) {
+            continue;
+        }
+
+        App::ElementNamePair elementName;
+        App::DocumentObject* subObject
+            = App::GeoFeature::resolveElement(object, subName.c_str(), elementName);
+        if (!subObject || !subObject->isAttachedToDocument()) {
+            continue;
+        }
+
+        if (!firstObject) {
+            firstObject = subObject;
+        }
+        else if (subObject != firstObject) {
+            break;
+        }
+
+        const std::string element = !elementName.oldName.empty() ? elementName.oldName
+                                                                  : elementName.newName;
+        const SbVec3f& point = pickedPoint->getPoint();
+        ModelPick pick {
+            subObject->getNameInDocument(),
+            element,
+            Base::Vector3d(point[0], point[1], point[2])
+        };
+
+        if (isVertexName(element)) {
+            modelPick = std::move(pick);
+            return;
+        }
+        if (isEdgeName(element) && edgePick.element.empty()) {
+            edgePick = std::move(pick);
+        }
+    }
+
+    modelPick = std::move(edgePick);
 }
 
 bool SnapManager::snapToGrid(Base::Vector2d inputPos, Base::Vector2d& snapPos)

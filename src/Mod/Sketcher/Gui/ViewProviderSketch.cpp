@@ -1825,6 +1825,14 @@ bool ViewProviderSketch::mouseMove(const SbVec2s& cursorPos, Gui::View3DInventor
     }
     snapHandle = std::make_unique<SnapManager::SnapHandle>(snapManager.get(), Base::Vector2d(x, y));
 
+    // Tools snap to the model geometry under the cursor
+    if (Mode == STATUS_SKETCH_UseHandler) {
+        snapManager->updateModelPick(cursorPos, viewer);
+    }
+    else {
+        snapManager->clearModelPick();
+    }
+
     bool preselectChanged = false;
     if (Mode != STATUS_SELECT_Point && Mode != STATUS_SELECT_Edge
         && Mode != STATUS_SELECT_Constraint && Mode != STATUS_SKETCH_Drag

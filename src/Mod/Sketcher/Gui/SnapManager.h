@@ -30,6 +30,15 @@
 #include <Base/Tools2D.h>
 #include <Base/Vector3D.h>
 
+#include <Mod/Sketcher/App/GeoEnum.h>
+
+class SbVec2s;
+
+namespace Gui
+{
+class View3DInventorViewer;
+}
+
 namespace Part
 {
 class GeomLineSegment;
@@ -61,6 +70,35 @@ enum class SnapType
     Grid = 0x8,
 
     All = Angle | Point | Edge | Grid
+};
+
+/** Element of the 3D model (outside of the sketch) the cursor has been snapped onto.
+ *
+ * The element is not part of the sketch yet. Importing ObjectName.SubName as external geometry
+ * creates the sketch geometry that PosId refers to.
+ */
+struct ModelReference
+{
+    enum class Kind
+    {
+        None,
+        Point,        ///< A point: a vertex, the center of a circular edge or a degenerate edge
+        Edge,         ///< A point on an edge
+        EdgeMidpoint  ///< The middle of a straight edge
+    };
+
+    Kind kind = Kind::None;
+    std::string objectName;
+    std::string subName;
+    /// Position (sketch coordinates) the cursor is snapped to
+    Base::Vector2d position;
+    /// Point of the imported external geometry the position corresponds to (none for edges)
+    Sketcher::PointPos posId = Sketcher::PointPos::none;
+
+    bool isValid() const
+    {
+        return kind != Kind::None;
+    }
 };
 
 /* This class is used to manage the overriding of mouse pointer coordinates in Sketcher
@@ -97,6 +135,7 @@ class SnapManager
         void initParameters();
         void updateSnapParameter(const std::string& parametername);
         void updateSnapToObjectParameter(const std::string& parametername);
+        void updateSnapToModelParameter(const std::string& parametername);
         void updateSnapToGridParameter(const std::string& parametername);
         void updateSnapAngleParameter(const std::string& parametername);
 
@@ -115,6 +154,22 @@ public:
     bool snapAtAngle(Base::Vector2d inputPos, Base::Vector2d& snapPos);
     bool snapToObject(Base::Vector2d inputPos, Base::Vector2d& snapPos, SnapType mask);
     bool snapToGrid(Base::Vector2d inputPos, Base::Vector2d& snapPos);
+    /// Snaps to vertices, edges and circle centers of the 3D model while a tool is active
+    bool snapToModel(Base::Vector2d inputPos, Base::Vector2d& snapPos);
+
+    /** Looks for the vertex or edge of the 3D model (outside of the sketch) under the cursor.
+     * To be called on mouse move, before snapping. The 3D view does not preselect other objects
+     * while a sketch is edited, so the model is picked here.
+     */
+    void updateModelPick(const SbVec2s& cursorPos, const Gui::View3DInventorViewer* viewer);
+    void clearModelPick();
+
+    /** Returns the model element the last computed position was snapped to, or an invalid
+     * reference if that position was not snapped to the model. */
+    const ModelReference& getModelReference() const
+    {
+        return modelReference;
+    }
 
     bool snapToLineMiddle(Base::Vector3d& pointToOverride, const Part::GeomLineSegment* line);
     bool snapToArcMiddle(Base::Vector3d& pointToOverride, const Part::GeomArcOfCircle* arc);
@@ -141,7 +196,22 @@ private:
     bool angleSnapRequested;
     bool snapRequested;
     bool snapToObjectsRequested;
+    bool snapToModelRequested;
     bool snapToGridRequested;
+
+    /// Model element under the cursor, see updateModelPick()
+    struct ModelPick
+    {
+        std::string objectName;
+        std::string element;      ///< VertexN or EdgeN
+        Base::Vector3d point;     ///< Picked point, in global coordinates
+    };
+    ModelPick modelPick;
+
+    /// Result of the last snapToModel()
+    ModelReference modelReference;
+    /// Center of the circular model edge hovered last, offered as snap target near the center
+    ModelReference acquiredCenter;
 
     Base::Vector2d referencePoint;
     double lastMouseAngle;

@@ -142,6 +142,7 @@ private:
     static inline int getPreselectPoint(const ViewProviderSketch& vp);
     static inline int getPreselectCurve(const ViewProviderSketch& vp);
     static inline int getPreselectCross(const ViewProviderSketch& vp);
+    static inline const ModelReference& getModelReference(const ViewProviderSketch& vp);
 
     static inline void moveConstraint(
         ViewProviderSketch& vp,
@@ -233,6 +234,16 @@ public:
         Sketcher::PointPos pointPos = Sketcher::PointPos::none,
         bool createowncommand = true
     );
+
+    /** Imports, as external geometry, the model elements that suggested constraints refer to
+     * (see AutoConstraint::isPendingExternal()) and replaces the references with the GeoIds
+     * of the imported geometry. Suggestions whose element cannot be imported are removed.
+     *
+     * The import is part of the command currently open, if any, otherwise of an own command.
+     * Returns whether any external geometry was involved.
+     */
+    bool resolvePendingExternalAutoConstraints(std::vector<AutoConstraint>& autoConstrs);
+    bool resolvePendingExternalAutoConstraints(std::vector<std::vector<AutoConstraint>>& autoConstrLists);
 
     void setPositionText(const Base::Vector2d& Pos, const SbString& text);
     void setPositionText(const Base::Vector2d& Pos);
@@ -392,6 +403,15 @@ protected:
         std::vector<AutoConstraint>& constraints,
         const Base::Vector2d& Pos,
         const Base::Vector2d& Dir,
+        AutoConstraint::TargetType type
+    );
+
+    void resolvePendingExternalAutoConstraintList(std::vector<AutoConstraint>& autoConstrs);
+
+    /// Suggests a constraint to the model element (outside the sketch) Pos was snapped to
+    void seekModelReferenceAutoConstraint(
+        std::vector<AutoConstraint>& constraints,
+        const Base::Vector2d& Pos,
         AutoConstraint::TargetType type
     );
 

@@ -35,6 +35,7 @@
 
 #include <Inventor/events/SoKeyboardEvent.h>
 
+#include <App/Document.h>
 #include <Base/Console.h>
 #include <Base/Exception.h>
 #include <Gui/Application.h>
@@ -209,6 +210,13 @@ inline int ViewProviderSketchDrawSketchHandlerAttorney::getPreselectCurve(const 
 inline int ViewProviderSketchDrawSketchHandlerAttorney::getPreselectCross(const ViewProviderSketch& vp)
 {
     return vp.getPreselectCross();
+}
+
+inline const ModelReference& ViewProviderSketchDrawSketchHandlerAttorney::getModelReference(
+    const ViewProviderSketch& vp
+)
+{
+    return vp.snapManager->getModelReference();
 }
 
 inline void ViewProviderSketchDrawSketchHandlerAttorney::setAngleSnapping(
@@ -643,6 +651,152 @@ void DrawSketchHandler::seekPreselectionAutoConstraint(
         if (constr.Type != Sketcher::None) {
             suggestedConstraints.push_back(constr);
         }
+    }
+    else {
+        seekModelReferenceAutoConstraint(suggestedConstraints, Pos, type);
+    }
+}
+
+void DrawSketchHandler::seekModelReferenceAutoConstraint(
+    std::vector<AutoConstraint>& suggestedConstraints,
+    const Base::Vector2d& Pos,
+    AutoConstraint::TargetType type
+)
+{
+    const ModelReference& reference
+        = ViewProviderSketchDrawSketchHandlerAttorney::getModelReference(*sketchgui);
+
+    // Only if Pos is the position snapped to the model element
+    if (!reference.isValid() || (Pos - reference.position).Length() > Precision::Confusion()) {
+        return;
+    }
+
+    AutoConstraint constr;
+    constr.Type = Sketcher::None;
+    constr.GeoId = GeoEnum::GeoUndef;
+    constr.PosId = reference.posId;
+    constr.ExternalObjectName = reference.objectName;
+    constr.ExternalSubName = reference.subName;
+
+    const bool isPoint = reference.kind == ModelReference::Kind::Point;
+    if (type == AutoConstraint::VERTEX || type == AutoConstraint::VERTEX_NO_TANGENCY) {
+        switch (reference.kind) {
+            case ModelReference::Kind::Point:
+                constr.Type = Sketcher::Coincident;
+                break;
+            case ModelReference::Kind::Edge:
+                constr.Type = Sketcher::PointOnObject;
+                break;
+            case ModelReference::Kind::EdgeMidpoint:
+                constr.Type = Sketcher::Symmetric;
+                break;
+            default:
+                break;
+        }
+    }
+    else if (type == AutoConstraint::CURVE && isPoint) {
+        // The curve passes through the point
+        constr.Type = Sketcher::PointOnObject;
+    }
+
+    if (constr.Type != Sketcher::None) {
+        suggestedConstraints.push_back(constr);
+    }
+}
+
+bool DrawSketchHandler::resolvePendingExternalAutoConstraints(
+    std::vector<AutoConstraint>& autoConstrs
+)
+{
+    std::vector<std::vector<AutoConstraint>> autoConstrLists {std::move(autoConstrs)};
+    const bool involvesExternal = resolvePendingExternalAutoConstraints(autoConstrLists);
+    autoConstrs = std::move(autoConstrLists.front());
+    return involvesExternal;
+}
+
+bool DrawSketchHandler::resolvePendingExternalAutoConstraints(
+    std::vector<std::vector<AutoConstraint>>& autoConstrLists
+)
+{
+    auto isPending = [](const AutoConstraint& ac) {
+        return ac.isPendingExternal();
+    };
+    const bool involvesExternal = std::ranges::any_of(autoConstrLists, [&](const auto& list) {
+        return std::ranges::any_of(list, isPending);
+    });
+    if (!involvesExternal) {
+        return false;
+    }
+
+    // Join the command in progress, if any (e.g. a polyline being drawn)
+    int ownTransactionID = 0;
+    if (!sketchgui->getDocument()->hasPendingCommand()) {
+        ownTransactionID = sketchgui->getDocument()->openCommand(
+            QT_TRANSLATE_NOOP("Command", "Add external geometry")
+        );
+    }
+
+    for (auto& autoConstrs : autoConstrLists) {
+        resolvePendingExternalAutoConstraintList(autoConstrs);
+    }
+
+    if (ownTransactionID != 0) {
+        Gui::Command::commitCommand(ownTransactionID);
+    }
+
+    return true;
+}
+
+void DrawSketchHandler::resolvePendingExternalAutoConstraintList(
+    std::vector<AutoConstraint>& autoConstrs
+)
+{
+    Sketcher::SketchObject* sketch = sketchgui->getSketchObject();
+
+    for (auto it = autoConstrs.begin(); it != autoConstrs.end();) {
+        if (!it->isPendingExternal()) {
+            ++it;
+            continue;
+        }
+
+        int geoId = GeoEnum::GeoUndef;
+        App::DocumentObject* source = sketch->getDocument()->getObject(it->ExternalObjectName.c_str());
+        if (source) {
+            geoId = findExternalReference(sketch, source, it->ExternalSubName);
+            if (geoId == GeoEnum::GeoUndef) {
+                try {
+                    geoId = addProjectedExternalReference(sketch, source, it->ExternalSubName);
+                }
+                catch (const Base::Exception& e) {
+                    Base::Console().error("{}\n", e.what());
+                }
+            }
+        }
+
+        // The imported geometry must provide the point the constraint refers to
+        if (geoId != GeoEnum::GeoUndef && it->PosId != Sketcher::PointPos::none) {
+            const Part::Geometry* geo = sketch->getGeometry(geoId);
+            if (!geo
+                || (it->PosId == Sketcher::PointPos::mid && geo->is<Part::GeomLineSegment>())) {
+                geoId = GeoEnum::GeoUndef;
+            }
+        }
+        if (geoId != GeoEnum::GeoUndef && it->Type == Sketcher::Symmetric) {
+            const Part::Geometry* geo = sketch->getGeometry(geoId);
+            if (!geo || !geo->is<Part::GeomLineSegment>()) {
+                geoId = GeoEnum::GeoUndef;
+            }
+        }
+
+        if (geoId == GeoEnum::GeoUndef) {
+            it = autoConstrs.erase(it);
+            continue;
+        }
+
+        it->GeoId = geoId;
+        it->ExternalObjectName.clear();
+        it->ExternalSubName.clear();
+        ++it;
     }
 }
 
@@ -1303,6 +1457,11 @@ bool DrawSketchHandler::generateOneAutoConstraintFromSuggestion(
     std::vector<std::unique_ptr<Sketcher::Constraint>>& autoConstraints
 )
 {
+    // Model elements must have been imported before, see resolvePendingExternalAutoConstraints()
+    if (ac.isPendingExternal()) {
+        return true;
+    }
+
     int geoId2 = ac.GeoId;
     Sketcher::PointPos posId2 = ac.PosId;
 
@@ -1613,8 +1772,12 @@ void DrawSketchHandler::createAutoConstraints(
         openCommand(QT_TRANSLATE_NOOP("Command", "Add Auto-Constraints"));
     }
 
+    // Import the model elements the constraints refer to (within the same command)
+    std::vector<AutoConstraint> resolvedConstrs = autoConstrs;
+    resolvePendingExternalAutoConstraints(resolvedConstrs);
+
     // Iterate through constraints
-    for (auto& cstr : autoConstrs) {
+    for (auto& cstr : resolvedConstrs) {
         int geoId2 = cstr.GeoId;
 
         switch (cstr.Type) {

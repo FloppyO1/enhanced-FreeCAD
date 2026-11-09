@@ -253,6 +253,25 @@ Requires to re-enter edit mode to take effect.</string>
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="Gui::PrefCheckBox" name="checkBoxSnapToModel">
+        <property name="toolTip">
+         <string>While drawing, new points snap to the vertices, edges and circle centers of the 3D model. The referenced element is imported as external geometry and constrained automatically.</string>
+        </property>
+        <property name="text">
+         <string>Snap to model geometry</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="prefEntry" stdset="0">
+         <cstring>SnapToModel</cstring>
+        </property>
+        <property name="prefPath" stdset="0">
+         <cstring>Mod/Sketcher/Snap</cstring>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
