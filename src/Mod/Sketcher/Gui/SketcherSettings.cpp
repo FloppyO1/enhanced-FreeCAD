@@ -115,6 +115,16 @@ SketcherSettings::SketcherSettings(QWidget* parent)
     , ui(new Ui_SketcherSettings)
 {
     ui->setupUi(this);
+
+    ui->spinBoxSuggestedConstraintSnapDistance->setEnabled(
+        ui->checkBoxSnapToSuggestedConstraints->isChecked()
+    );
+    connect(
+        ui->checkBoxSnapToSuggestedConstraints,
+        &QCheckBox::toggled,
+        ui->spinBoxSuggestedConstraintSnapDistance,
+        &QWidget::setEnabled
+    );
 }
 
 /**
@@ -139,6 +149,8 @@ void SketcherSettings::saveSettings()
     ui->checkBoxAddExtGeo->onSave();
     ui->checkBoxMakeInternals->onSave();
     ui->checkBoxSnapToModel->onSave();
+    ui->checkBoxSnapToSuggestedConstraints->onSave();
+    ui->spinBoxSuggestedConstraintSnapDistance->onSave();
 
     enum
     {
@@ -222,6 +234,8 @@ void SketcherSettings::loadSettings()
     ui->checkBoxAddExtGeo->onRestore();
     ui->checkBoxMakeInternals->onRestore();
     ui->checkBoxSnapToModel->onRestore();
+    ui->checkBoxSnapToSuggestedConstraints->onRestore();
+    ui->spinBoxSuggestedConstraintSnapDistance->onRestore();
 
     // Dimensioning constraints mode
     ui->dimensioningMode->clear();

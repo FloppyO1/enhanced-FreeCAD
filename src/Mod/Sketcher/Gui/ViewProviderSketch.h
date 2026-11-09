@@ -1018,6 +1018,9 @@ private:
         const std::vector<Base::Vector2d>& EditMarkers,
         unsigned int augmentationlevel = 0
     );
+    /** Draws image (a cursor crosshair, whose hot spot is its center) at position on the
+     * sketch, unscaled. Without position, removes it. */
+    void drawSnapCrosshair(const std::vector<Base::Vector2d>& position, const QImage& image);
     /// set the pick style of the sketch coordinate axes
     void setAxisPickStyle(bool on);
 

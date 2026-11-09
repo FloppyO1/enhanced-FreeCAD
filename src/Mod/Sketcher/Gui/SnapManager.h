@@ -138,6 +138,8 @@ class SnapManager
         void updateSnapToModelParameter(const std::string& parametername);
         void updateSnapToGridParameter(const std::string& parametername);
         void updateSnapAngleParameter(const std::string& parametername);
+        void updateSnapToSuggestedConstraintsParameter(const std::string& parametername);
+        void updateSuggestedConstraintSnapDistanceParameter(const std::string& parametername);
 
         static ParameterGrp::handle getParameterGrpHandle();
 
@@ -176,6 +178,19 @@ public:
 
     void setAngleSnapping(bool enable, Base::Vector2d referencepoint);
 
+    /** Sets the sketch position of the cursor and the sketch vectors corresponding to moving it by
+     * one screen pixel to the right (perPixelX) and upwards (perPixelY). */
+    void setCursorFrame(
+        const Base::Vector2d& cursor,
+        const Base::Vector2d& perPixelX,
+        const Base::Vector2d& perPixelY
+    );
+
+
+    /** Returns the distance, in sketch units, within which tools move the cursor position onto
+     * the position satisfying the suggested constraints, or 0 if this snapping is disabled. */
+    double getSuggestedConstraintSnapDistance() const;
+
     struct SnapHandle
     {
         SnapManager* mgr = nullptr;
@@ -198,6 +213,16 @@ private:
     bool snapToObjectsRequested;
     bool snapToModelRequested;
     bool snapToGridRequested;
+    bool snapToSuggestedConstraintsRequested;
+
+    /// Snap distance to suggested constraints, in pixels
+    int suggestedConstraintSnapDistance;
+    /// Size of a screen pixel in sketch units, see setCursorFrame()
+    double pixelSize;
+    /// See setCursorFrame()
+    Base::Vector2d cursorFramePosition;
+    Base::Vector2d cursorFramePerPixelX;
+    Base::Vector2d cursorFramePerPixelY;
 
     /// Model element under the cursor, see updateModelPick()
     struct ModelPick

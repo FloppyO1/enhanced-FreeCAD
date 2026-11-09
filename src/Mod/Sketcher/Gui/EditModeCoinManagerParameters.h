@@ -40,6 +40,8 @@
 #include <Inventor/nodes/SoPickStyle.h>
 #include <Inventor/nodes/SoText2.h>
 #include <Inventor/nodes/SoTranslation.h>
+#include <Inventor/nodes/SoSwitch.h>
+#include <Inventor/nodes/SoImage.h>
 
 #include <Base/Color.h>
 #include <Gui/ViewParams.h>
@@ -495,6 +497,21 @@ struct EditModeScenegraphNodes
     SoCoordinate3* EditMarkersCoordinate;
     SoMarkerSet* EditMarkerSet;
     SoDrawStyle* EditMarkersDrawStyle;
+    //@}
+
+    /** @name Crosshair drawn on the snapped position*/
+    //@{
+    SoSwitch* SnapCrosshairSwitch;
+    SoTranslation* SnapCrosshairTranslation;
+    SoImage* SnapCrosshairImage;
+    long long SnapCrosshairImageKey = 0;
+    //@}
+
+    /** @name Rings around the points of the sketch that hide a point of external geometry*/
+    //@{
+    SoMaterial* ExternalOverlapMaterials;
+    SoCoordinate3* ExternalOverlapCoordinate;
+    SoMarkerSet* ExternalOverlapSet;
     //@}
 
     /** @name Temporal edit text nodes*/

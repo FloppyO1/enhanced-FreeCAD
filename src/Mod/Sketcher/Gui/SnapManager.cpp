@@ -22,6 +22,8 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+
 #include <QApplication>
 
 #include <BRepAdaptor_Curve.hxx>
@@ -112,6 +114,10 @@ void SnapManager::ParameterObserver::initParameters()
         {"SnapToModel", [this](const std::string& param) { updateSnapToModelParameter(param); }},
         {"SnapToGrid", [this](const std::string& param) { updateSnapToGridParameter(param); }},
         {"SnapAngle", [this](const std::string& param) { updateSnapAngleParameter(param); }},
+        {"SnapToSuggestedConstraints",
+         [this](const std::string& param) { updateSnapToSuggestedConstraintsParameter(param); }},
+        {"SuggestedConstraintSnapDistance",
+         [this](const std::string& param) { updateSuggestedConstraintSnapDistanceParameter(param); }},
     };
 
     for (auto& val : str2updatefunction) {
@@ -141,6 +147,25 @@ void SnapManager::ParameterObserver::updateSnapToModelParameter(const std::strin
     ParameterGrp::handle hGrp = getParameterGrpHandle();
 
     client.snapToModelRequested = hGrp->GetBool(parametername.c_str(), true);
+}
+
+void SnapManager::ParameterObserver::updateSnapToSuggestedConstraintsParameter(
+    const std::string& parametername
+)
+{
+    ParameterGrp::handle hGrp = getParameterGrpHandle();
+
+    client.snapToSuggestedConstraintsRequested = hGrp->GetBool(parametername.c_str(), true);
+}
+
+void SnapManager::ParameterObserver::updateSuggestedConstraintSnapDistanceParameter(
+    const std::string& parametername
+)
+{
+    ParameterGrp::handle hGrp = getParameterGrpHandle();
+
+    client.suggestedConstraintSnapDistance
+        = static_cast<int>(std::max(1L, hGrp->GetInt(parametername.c_str(), 10)));
 }
 
 void SnapManager::ParameterObserver::updateSnapToGridParameter(const std::string& parametername)
@@ -208,6 +233,9 @@ ParameterGrp::handle SnapManager::ParameterObserver::getParameterGrpHandle()
 SnapManager::SnapManager(ViewProviderSketch& vp)
     : viewProvider(vp)
     , angleSnapRequested(false)
+    , snapToSuggestedConstraintsRequested(true)
+    , suggestedConstraintSnapDistance(10)
+    , pixelSize(0.0)
     , referencePoint(Base::Vector2d(0., 0.))
     , lastMouseAngle(0.0)
 {
@@ -367,9 +395,12 @@ bool SnapManager::snapToObject(Base::Vector2d inputPos, Base::Vector2d& snapPos,
 
 bool SnapManager::snapToModel(Base::Vector2d inputPos, Base::Vector2d& snapPos)
 {
-    // Only while a tool creates geometry: only tools create the matching constraints
+    // Only while a tool creates geometry or a point is dragged: only they create the matching
+    // constraints
+    const auto mode = viewProvider.getSketchMode();
     if (!snapToModelRequested
-        || viewProvider.getSketchMode() != ViewProviderSketch::STATUS_SKETCH_UseHandler) {
+        || (mode != ViewProviderSketch::STATUS_SKETCH_UseHandler
+            && mode != ViewProviderSketch::STATUS_SKETCH_Drag)) {
         acquiredCenter = ModelReference();
         return false;
     }
@@ -491,9 +522,12 @@ bool SnapManager::snapToModel(Base::Vector2d inputPos, Base::Vector2d& snapPos)
     }
 
     // The center of the circle hovered last, when the cursor gets close to it
+    const double suggestedSnapDistance = getSuggestedConstraintSnapDistance();
+    const double centerSnapDistance = suggestedSnapDistance > 0.0
+        ? suggestedSnapDistance
+        : viewProvider.getScaleFactor() * modelCenterSnapScale;
     if (result.kind != ModelReference::Kind::Point && acquiredCenter.isValid()
-        && (inputPos - acquiredCenter.position).Length()
-            < viewProvider.getScaleFactor() * modelCenterSnapScale) {
+        && (inputPos - acquiredCenter.position).Length() < centerSnapDistance) {
         result = acquiredCenter;
     }
 
@@ -522,7 +556,12 @@ void SnapManager::updateModelPick(const SbVec2s& cursorPos, const Gui::View3DInv
     SoRayPickAction pickAction(viewer->getSoRenderManager()->getViewportRegion());
     pickAction.setPickAll(true);
     pickAction.setPoint(cursorPos);
-    pickAction.setRadius(viewer->getPickRadius());
+    // Model elements are reached from the same distance as the elements of the sketch
+    float pickRadius = viewer->getPickRadius();
+    if (snapToSuggestedConstraintsRequested) {
+        pickRadius = std::max(pickRadius, static_cast<float>(suggestedConstraintSnapDistance));
+    }
+    pickAction.setRadius(pickRadius);
     pickAction.apply(viewer->getSoRenderManager()->getSceneGraph());
 
     // Only elements of the first object hit (the visible one) are considered. Among them a
@@ -667,6 +706,27 @@ bool SnapManager::snapToArcMiddle(Base::Vector3d& pointToOverride, const Part::G
     }
 
     return false;
+}
+
+void SnapManager::setCursorFrame(
+    const Base::Vector2d& cursor,
+    const Base::Vector2d& perPixelX,
+    const Base::Vector2d& perPixelY
+)
+{
+    cursorFramePosition = cursor;
+    cursorFramePerPixelX = perPixelX;
+    cursorFramePerPixelY = perPixelY;
+    pixelSize = perPixelX.Length();
+}
+
+double SnapManager::getSuggestedConstraintSnapDistance() const
+{
+    if (!snapRequested || !snapToSuggestedConstraintsRequested || pixelSize <= 0.0) {
+        return 0.0;
+    }
+
+    return suggestedConstraintSnapDistance * pixelSize;
 }
 
 void SnapManager::setAngleSnapping(bool enable, Base::Vector2d referencepoint)

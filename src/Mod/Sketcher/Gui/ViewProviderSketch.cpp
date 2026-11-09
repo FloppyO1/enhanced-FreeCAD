@@ -1402,6 +1402,14 @@ bool ViewProviderSketch::mouseButtonPressed(int Button, bool pressed, const SbVe
                 }
                 case STATUS_SKETCH_Drag: {
                     Base::Vector2d snappedPos = snapHandle->compute();
+                    if (dragAutoConstraintHandler) {
+                        snappedPos = dragAutoConstraintHandler->snap(
+                            drag.Dragged,
+                            snappedPos,
+                            Base::Vector2d(drag.xInit, drag.yInit),
+                            drag.relative
+                        );
+                    }
                     commitDragMove(snappedPos.x, snappedPos.y);
                     setSketchMode(STATUS_NONE);
                     return true;
@@ -1825,8 +1833,33 @@ bool ViewProviderSketch::mouseMove(const SbVec2s& cursorPos, Gui::View3DInventor
     }
     snapHandle = std::make_unique<SnapManager::SnapHandle>(snapManager.get(), Base::Vector2d(x, y));
 
-    // Tools snap to the model geometry under the cursor
-    if (Mode == STATUS_SKETCH_UseHandler) {
+    // Screen pixels on the sketch plane, to convert between pixels and sketch positions
+    constexpr short pixelSampleDistance = 10;
+    auto sketchVectorPerPixel = [&](const SbVec2s& sampleOffset, Base::Vector2d& perPixel) {
+        SbLine sampleLine;
+        double sampleX, sampleY;
+        if (!getProjectingLine(cursorPos + sampleOffset, viewer, sampleLine)
+            || !getCoordsOnSketchPlane(
+                sampleLine.getPosition(),
+                sampleLine.getDirection(),
+                sampleX,
+                sampleY
+            )) {
+            return false;
+        }
+        perPixel = Base::Vector2d(sampleX - x, sampleY - y) / pixelSampleDistance;
+        return true;
+    };
+    Base::Vector2d perPixelX, perPixelY;
+    if (sketchVectorPerPixel(SbVec2s(pixelSampleDistance, 0), perPixelX)
+        && sketchVectorPerPixel(SbVec2s(0, pixelSampleDistance), perPixelY)) {
+        snapManager->setCursorFrame(Base::Vector2d(x, y), perPixelX, perPixelY);
+    }
+
+    // Tools, and a dragged point, snap to the model geometry under the cursor
+    if (Mode == STATUS_SKETCH_UseHandler
+        || (Mode == STATUS_SKETCH_Drag && dragAutoConstraintHandler
+            && dragAutoConstraintHandler->isSnapping(drag.Dragged))) {
         snapManager->updateModelPick(cursorPos, viewer);
     }
     else {
@@ -1886,6 +1919,14 @@ bool ViewProviderSketch::mouseMove(const SbVec2s& cursorPos, Gui::View3DInventor
         }
         case STATUS_SKETCH_Drag: {
             Base::Vector2d dragPos = snapHandle->compute();
+            if (dragAutoConstraintHandler) {
+                dragPos = dragAutoConstraintHandler->snap(
+                    drag.Dragged,
+                    dragPos,
+                    Base::Vector2d(drag.xInit, drag.yInit),
+                    drag.relative
+                );
+            }
             const bool temporaryMoveSucceeded = doDragStep(dragPos.x, dragPos.y);
 
             if (dragAutoConstraintHandler) {
@@ -3866,6 +3907,12 @@ void ViewProviderSketch::drawEditMarkers(const std::vector<Base::Vector2d>& Edit
                                          unsigned int augmentationlevel)
 {
     editCoinManager->drawEditMarkers(EditMarkers, augmentationlevel);
+}
+
+void ViewProviderSketch::drawSnapCrosshair(const std::vector<Base::Vector2d>& position,
+                                           const QImage& image)
+{
+    editCoinManager->drawSnapCrosshair(position, image);
 }
 
 void ViewProviderSketch::updateData(const App::Property* prop) {
