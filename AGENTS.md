@@ -37,6 +37,11 @@ A successful reproduction is only part of that review.
   structure closely; the contributor includes the original as AI_POLICY.md requests.
 - Commit, push, or rewrite history only when asked, using the contributor's own commit messages.
   Do not merge or rebase merely to refresh a branch; establish a concrete reason first.
+- Personal fork exception (FloppyO1/enhanced-FreeCAD): for commits kept in this personal fork,
+  the agent may draft commit messages describing the implemented feature, for the owner to
+  review and commit. Such messages end with an `Assisted-by: <model ID>` trailer naming the
+  actual model. This does not apply to anything submitted to the FreeCAD project, where the
+  rules above remain in force.
 - Disclose AI assistance as AI_POLICY.md requires. State the actual known model identity when
   asked, without guessing. Do not add AI co-author trailers, tool branding, or signatures.
   Preserve attribution to human authors as CONTRIBUTING.md requires.
