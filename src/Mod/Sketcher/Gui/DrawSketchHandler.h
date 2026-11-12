@@ -422,6 +422,24 @@ protected:
         AutoConstraint::TargetType type
     );
 
+    /// Radius of a circle or arc of circle, or 0 for other (or no) geometry
+    static double getCircularRadius(const Part::Geometry* geometry);
+
+    /** Tracing a circle: if centerConstraints make the center of a circle (or arc) of the given
+     * radius coincident with the center of a circle or arc of the same radius (within
+     * tolerance), sketch or model geometry, suggests in rimConstraints that both radii are equal,
+     * in place of suggestions on the same curve that equality makes redundant.
+     *
+     * centerConstraints and rimConstraints may be the same vector.
+     * Returns whether the equality has been suggested.
+     */
+    bool seekConcentricEqualAutoConstraint(
+        const std::vector<AutoConstraint>& centerConstraints,
+        std::vector<AutoConstraint>& rimConstraints,
+        double radius,
+        double tolerance
+    );
+
     bool seekLineExtensionAutoConstraint(
         std::vector<AutoConstraint>& constraints,
         const Base::Vector2d& Pos,

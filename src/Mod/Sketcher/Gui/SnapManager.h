@@ -94,6 +94,8 @@ struct ModelReference
     Base::Vector2d position;
     /// Point of the imported external geometry the position corresponds to (none for edges)
     Sketcher::PointPos posId = Sketcher::PointPos::none;
+    /// Radius of the circular edge, for the center of a circular edge (otherwise 0)
+    double radius = 0.0;
 
     bool isValid() const
     {

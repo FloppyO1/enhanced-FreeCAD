@@ -170,6 +170,17 @@ private:
                                                                        : Base::Vector2d(),
                     AutoConstraint::CURVE
                 );
+
+                // Tracing a circle: the center on its center and the rim on it
+                if (constructionMethod() == ConstructionMethod::Center
+                    && seekConcentricEqualAutoConstraint(
+                        sugConstraints[0],
+                        sugConstraints[1],
+                        radius,
+                        Precision::Confusion() * std::max(1.0, radius)
+                    )) {
+                    renderSuggestConstraintsCursor(sugConstraints[1]);
+                }
             } break;
             case SelectMode::SeekThird: {
                 try {

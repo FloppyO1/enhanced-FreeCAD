@@ -164,6 +164,7 @@ void DrawSketchHandlerDragAutoConstraint::seekSnapSuggestions(
         constr.PosId = model->posId;
         constr.ExternalObjectName = model->objectName;
         constr.ExternalSubName = model->subName;
+        constr.ExternalRadius = model->radius;
         switch (model->kind) {
             case ModelReference::Kind::Point:
                 constr.Type = Coincident;
@@ -190,6 +191,9 @@ void DrawSketchHandlerDragAutoConstraint::seekSnapSuggestions(
         candidate.PosId = posId;
         return geoId != dragged.GeoId && !isExistingConstraint(dragged, candidate);
     };
+
+    // Radii closer than the snap distance are made equal when tracing a circle
+    const double radiusTolerance = snapDistance;
 
     // Vertices first, including the origin
     int bestGeoId = GeoEnum::GeoUndef;
@@ -285,6 +289,16 @@ void DrawSketchHandlerDragAutoConstraint::seekSnapSuggestions(
     }
     else if (isOffsetAlongDirection(dir, Base::Vector2d(0.0, 1.0))) {
         addAutoConstraint(Vertical, GeoEnum::GeoUndef);
+    }
+
+    // Tracing a circle: its center dragged onto the center of a circle of the same radius
+    if (dragged.Pos == PointPos::mid) {
+        seekConcentricEqualAutoConstraint(
+            suggestedConstraints,
+            suggestedConstraints,
+            getCircularRadius(obj->getGeometry(dragged.GeoId)),
+            radiusTolerance
+        );
     }
 
     removeInvalidConstraints(dragged);
@@ -447,6 +461,14 @@ bool DrawSketchHandlerDragAutoConstraint::isExistingConstraint(
                 }
                 break;
             }
+
+            case Equal:
+                if (c->Type == Equal
+                    && ((c->First == dragged.GeoId && c->Second == constraint.GeoId)
+                        || (c->Second == dragged.GeoId && c->First == constraint.GeoId))) {
+                    return true;
+                }
+                break;
 
             case Horizontal:
             case Vertical: {
@@ -693,6 +715,16 @@ void DrawSketchHandlerDragAutoConstraint::updateSuggestions()
         if (constr.Type != None) {
             suggestedConstraints.push_back(constr);
         }
+    }
+
+    // Tracing a circle: its center dragged onto the center of a circle of the same radius
+    if (dragged.Pos == PointPos::mid) {
+        seekConcentricEqualAutoConstraint(
+            suggestedConstraints,
+            suggestedConstraints,
+            getCircularRadius(getSolvedGeometry(dragged.GeoId)),
+            snapDistance
+        );
     }
 
     removeInvalidConstraints(dragged);

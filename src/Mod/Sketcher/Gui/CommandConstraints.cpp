@@ -39,7 +39,13 @@
 #include <algorithm>
 #include <sstream>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
+#include <BRep_Tool.hxx>
+#include <Standard_Failure.hxx>
+#include <TopoDS.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Pnt.hxx>
 
 #include <boost/range/adaptor/reversed.hpp>
 
@@ -59,6 +65,7 @@
 #include <Gui/Selection/SelectionObject.h>
 #include <Gui/View3DInventor.h>
 #include <Gui/View3DInventorViewer.h>
+#include <Mod/Part/App/PartFeature.h>
 #include <Mod/Sketcher/App/GeometryFacade.h>
 #include <Mod/Sketcher/App/SketchObject.h>
 #include <Mod/Sketcher/App/SolverGeometryExtension.h>
@@ -1359,6 +1366,121 @@ void setViewerSelectionEnabled(const ViewProviderSketch* vp, bool enable)
     }
 }
 
+/**
+ * @brief Preview, in sketch coordinates, of the element of the 3D model (outside of the sketch)
+ * that picking it would import as external geometry.
+ *
+ * @param[in] sketch The sketch being edited.
+ * @param[in] objectName, subName The preselected element, as in the selection messages.
+ * @param[out] curve The edge, as a polyline (empty for a vertex).
+ * @param[out] markers The points that can be picked: the vertex, or the center of a circular edge.
+ * @return Whether the element is a vertex or an edge of the model that can be previewed.
+ */
+bool getModelElementPreview(Sketcher::SketchObject* sketch,
+                            const char* objectName,
+                            const char* subName,
+                            std::vector<Base::Vector2d>& curve,
+                            std::vector<Base::Vector2d>& markers)
+{
+    curve.clear();
+    markers.clear();
+
+    if (!sketch || Base::Tools::isNullOrEmpty(objectName) || Base::Tools::isNullOrEmpty(subName)) {
+        return false;
+    }
+
+    // The element name is the last part of the sub-element path
+    const std::string fullSubName(subName);
+    const std::size_t lastDot = fullSubName.rfind('.');
+    const std::string element =
+        lastDot == std::string::npos ? fullSubName : fullSubName.substr(lastDot + 1);
+    const bool isEdge = element.starts_with("Edge") && element.size() > 4;
+    const bool isVertex = element.starts_with("Vertex") && element.size() > 6;
+    if (!isEdge && !isVertex) {
+        return false;
+    }
+
+    App::DocumentObject* object = sketch->getDocument()->getObject(objectName);
+    if (!object || object == sketch) {
+        return false;
+    }
+
+    // Same coordinate system as the snapping to the model, see SnapManager::snapToModel()
+    const Base::Placement inverseSketchPlacement = sketch->Placement.getValue().inverse();
+    auto toSketch = [&inverseSketchPlacement](const gp_Pnt& point) {
+        Base::Vector3d vector(point.X(), point.Y(), point.Z());
+        inverseSketchPlacement.multVec(vector, vector);
+        return Base::Vector2d(vector.x, vector.y);
+    };
+
+    try {
+        const Part::TopoShape shape = Part::Feature::getTopoShape(
+            object,
+            Part::ShapeOption::ResolveLink | Part::ShapeOption::Transform,
+            subName);
+        if (shape.isNull()) {
+            return false;
+        }
+
+        const TopoDS_Shape& occShape = shape.getShape();
+        if (occShape.ShapeType() == TopAbs_VERTEX) {
+            markers.push_back(toSketch(BRep_Tool::Pnt(TopoDS::Vertex(occShape))));
+            return true;
+        }
+        if (occShape.ShapeType() != TopAbs_EDGE) {
+            return false;
+        }
+
+        BRepAdaptor_Curve adaptor(TopoDS::Edge(occShape));
+        const double first = adaptor.FirstParameter();
+        const double last = adaptor.LastParameter();
+        const int segments = adaptor.GetType() == GeomAbs_Line ? 1 : 64;
+        for (int i = 0; i <= segments; ++i) {
+            const double parameter = first + (last - first) * i / segments;
+            curve.push_back(toSketch(adaptor.Value(parameter)));
+        }
+
+        if (adaptor.GetType() == GeomAbs_Circle) {
+            // Its center can be picked as well
+            markers.push_back(toSketch(adaptor.Circle().Location()));
+        }
+        return true;
+    }
+    catch (const Base::Exception&) {
+    }
+    catch (const Standard_Failure&) {
+    }
+
+    curve.clear();
+    markers.clear();
+    return false;
+}
+
+/**
+ * @brief Updates the preview of the model element under the cursor from a selection message.
+ *
+ * @return Whether the preview has to be redrawn with curve and markers (empty to remove it).
+ */
+bool updateModelElementPreview(Sketcher::SketchObject* sketch,
+                               const Gui::SelectionChanges& msg,
+                               std::vector<Base::Vector2d>& curve,
+                               std::vector<Base::Vector2d>& markers)
+{
+    switch (msg.Type) {
+        case Gui::SelectionChanges::SetPreselect:
+            getModelElementPreview(sketch, msg.pObjectName, msg.pSubName, curve, markers);
+            return true;
+        case Gui::SelectionChanges::RmvPreselect:
+        case Gui::SelectionChanges::AddSelection:
+        case Gui::SelectionChanges::ClrSelection:
+            curve.clear();
+            markers.clear();
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 /**
@@ -1447,6 +1569,7 @@ public:
 
     void deactivated() override
     {
+        showModelElementPreview({}, {});
         setViewerSelectionEnabled(sketchgui, false);
     }
 
@@ -1467,6 +1590,12 @@ public:
 
     bool onSelectionChanged(const Gui::SelectionChanges& msg) override
     {
+        std::vector<Base::Vector2d> previewCurve;
+        std::vector<Base::Vector2d> previewMarkers;
+        if (updateModelElementPreview(sketchgui->getSketchObject(), msg, previewCurve, previewMarkers)) {
+            showModelElementPreview(previewCurve, previewMarkers);
+        }
+
         if (msg.Type != Gui::SelectionChanges::AddSelection || !msg.pObjectName || !msg.pSubName
             || std::strcmp(msg.pObjectName, sketchgui->getSketchObject()->getNameInDocument()) == 0) {
             return false;
@@ -2071,6 +2200,20 @@ protected:
                          QT_TRANSLATE_NOOP("Notifications", "Failed to add external geometry"));
         return GeoEnum::GeoUndef;
     }
+
+    /// Shows the model element that picking would import, see getModelElementPreview()
+    void showModelElementPreview(const std::vector<Base::Vector2d>& curve,
+                                 const std::vector<Base::Vector2d>& markers)
+    {
+        if (!modelElementPreviewShown && curve.empty() && markers.empty()) {
+            return;
+        }
+        drawEdit(curve);
+        drawEditMarkers(markers);
+        modelElementPreviewShown = !curve.empty() || !markers.empty();
+    }
+
+    bool modelElementPreviewShown = false;
 };
 
 void CmdSketcherConstraint::activated(int /*iMsg*/)
@@ -2346,6 +2489,7 @@ public:
 
     void deactivated() override
     {
+        showModelElementPreview({}, {});
         abortCommand();
         externalReferences.clear();
         skipReleaseAfterExternalSelection = false;
@@ -2427,6 +2571,12 @@ public:
 
     bool onSelectionChanged(const Gui::SelectionChanges& msg) override
     {
+        std::vector<Base::Vector2d> previewCurve;
+        std::vector<Base::Vector2d> previewMarkers;
+        if (updateModelElementPreview(Obj, msg, previewCurve, previewMarkers)) {
+            showModelElementPreview(previewCurve, previewMarkers);
+        }
+
         if (msg.Type != Gui::SelectionChanges::AddSelection || !msg.pObjectName || !msg.pSubName
             || std::strcmp(msg.pObjectName, Obj->getNameInDocument()) == 0) {
             return false;
@@ -3996,6 +4146,20 @@ protected:
         externalReferences.push_back({source, subName, externalGeoId});
         return externalGeoId;
     }
+
+    /// Shows the model element that picking would import, see getModelElementPreview()
+    void showModelElementPreview(const std::vector<Base::Vector2d>& curve,
+                                 const std::vector<Base::Vector2d>& markers)
+    {
+        if (!modelElementPreviewShown && curve.empty() && markers.empty()) {
+            return;
+        }
+        drawEdit(curve);
+        drawEditMarkers(markers);
+        modelElementPreviewShown = !curve.empty() || !markers.empty();
+    }
+
+    bool modelElementPreviewShown = false;
 
     void restoreExternalReferences()
     {
