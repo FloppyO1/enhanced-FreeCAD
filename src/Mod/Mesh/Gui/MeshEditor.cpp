@@ -420,7 +420,7 @@ void MeshFaceAddition::addFacetCallback(void* ud, SoEventCallback* n)
             }
         }
         else if (
-            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP
+            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP && !view->isRadialGestureActive()
         ) {
             QMenu menu;
             QAction* fin = menu.addAction(MeshFaceAddition::tr("Finish"));
@@ -772,7 +772,7 @@ void MeshFillHole::fileHoleCallback(void* ud, SoEventCallback* n)
             }
         }
         else if (
-            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP
+            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP && !view->isRadialGestureActive()
         ) {
             QMenu menu;
             QAction* fin = menu.addAction(MeshFillHole::tr("Finish"));

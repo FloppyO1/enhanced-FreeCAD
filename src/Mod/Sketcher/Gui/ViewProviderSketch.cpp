@@ -1517,6 +1517,16 @@ bool ViewProviderSketch::mouseButtonPressed(int Button, bool pressed, const SbVe
             }
         }
         else if (!pressed) {
+            // Rule for the radial menu: a right-button drag that became a radial menu gesture is
+            // not a right click. Its release neither ends the active tool, nor selects, nor opens
+            // a context menu; the preselection state armed by the press is only reset.
+            if (viewer->isRadialGestureActive()) {
+                if (Mode != STATUS_SKETCH_UseHandler) {
+                    setSketchMode(STATUS_NONE);
+                }
+                blockContextMenu = true;
+                return true;
+            }
             switch (Mode) {
                 case STATUS_SKETCH_UseHandler:
                     // delegate to handler whether to quit or do otherwise

@@ -5076,6 +5076,11 @@ bool View3DInventorViewer::isPopupMenuEnabled() const
     return navigation->isPopupMenuEnabled();
 }
 
+bool View3DInventorViewer::isRadialGestureActive() const
+{
+    return navigation && navigation->isRadialGestureActive();
+}
+
 /*!
   Set the flag deciding whether or not to show the axis cross.
 */

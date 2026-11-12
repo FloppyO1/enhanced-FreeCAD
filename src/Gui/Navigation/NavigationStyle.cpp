@@ -43,6 +43,7 @@
 #include <QByteArray>
 #include <QCursor>
 #include <QMenu>
+#include <QTimer>
 
 
 #include <algorithm>
@@ -64,6 +65,8 @@
 #include "SoTouchEvents.h"
 #include "MenuManager.h"
 #include "MouseSelection.h"
+#include "RadialMenu.h"
+#include "RadialMenuConfig.h"
 #include "Navigation/NavigationAnimator.h"
 #include "Navigation/NavigationAnimation.h"
 #include "Selection.h"
@@ -415,6 +418,7 @@ NavigationStyle::NavigationStyle()
 
 NavigationStyle::~NavigationStyle()
 {
+    closeRadialMenu();
     finalize();
     delete this->animator;
 
@@ -2273,10 +2277,24 @@ SbBool NavigationStyle::processEvent(const SoEvent* const ev)
         }
     }
 
+    bool suppressPopup = false;
+    if (handleRadialMenuEvent(ev, suppressPopup)) {
+        return true;
+    }
+
     const ViewerMode curmode = this->currentmode;
 
     SbBool processed = false;
-    processed = this->processSoEvent(ev);
+    if (suppressPopup) {
+        // the right button release ends a radial menu gesture: it must not open the context menu
+        const SbBool popupWasEnabled = this->menuenabled;
+        this->menuenabled = false;
+        processed = this->processSoEvent(ev);
+        this->menuenabled = popupWasEnabled;
+    }
+    else {
+        processed = this->processSoEvent(ev);
+    }
 
     // check for left click without selecting something
     if ((curmode == NavigationStyle::SELECTION || curmode == NavigationStyle::IDLE) && !processed) {
@@ -2708,8 +2726,155 @@ SbBool NavigationStyle::isPopupMenuEnabled() const
     return this->menuenabled;
 }
 
+bool NavigationStyle::supportsRadialMenu() const
+{
+    return true;
+}
+
+void NavigationStyle::closeRadialMenu()
+{
+    if (radialMenuWidget) {
+        radialMenuWidget->close();  // deletes itself
+    }
+    radialMenuWidget.clear();
+}
+
+/**
+ * Detects the "press right button and drag" gesture and drives the radial menu.
+ * Returns true if the event has been consumed. The button press itself is always forwarded to the
+ * navigation style so that its button bookkeeping stays correct; the matching release is forwarded
+ * with the context menu suppressed (suppressPopup).
+ */
+bool NavigationStyle::handleRadialMenuEvent(const SoEvent* ev, bool& suppressPopup)
+{
+    const bool isButton = ev->isOfType(SoMouseButtonEvent::getClassTypeId());
+    const bool isMove = ev->isOfType(SoLocation2Event::getClassTypeId());
+    if (!isButton && !isMove) {
+        return false;
+    }
+
+    auto runSlot = [](const std::vector<RadialMenu::Item>& items, int slot) {
+        if (slot >= 0 && slot < int(items.size()) && !items[slot].command.empty()
+            && items[slot].enabled) {
+            const std::string name = items[slot].command;
+            // run outside of the event handler
+            QTimer::singleShot(0, [name]() {
+                Application::Instance->commandManager().runCommandByName(name.c_str());
+            });
+        }
+    };
+
+    const bool rightButton = isButton
+        && static_cast<const SoMouseButtonEvent*>(ev)->getButton() == SoMouseButtonEvent::BUTTON2;
+    const bool press = isButton
+        && static_cast<const SoMouseButtonEvent*>(ev)->getState() == SoButtonEvent::DOWN;
+
+    switch (radialState) {
+        case RadialState::Idle:
+            if (rightButton && press) {
+                radialBlockPopup = false;  // a new right click starts a fresh gesture
+            }
+            if (rightButton && press && supportsRadialMenu() && isPopupMenuEnabled()
+                && !button1down && !button3down && !ev->wasCtrlDown() && !ev->wasShiftDown()
+                && !ev->wasAltDown() && RadialMenuConfig::isEnabled()) {
+                radialBlockPopup = false;
+                radialState = RadialState::Pending;
+                radialOrigin = QCursor::pos();
+            }
+            return false;
+
+        case RadialState::Pending: {
+            const QPoint delta = QCursor::pos() - radialOrigin;
+            const bool beyond = delta.manhattanLength() >= 1
+                && std::hypot(double(delta.x()), double(delta.y()))
+                    >= RadialMenuConfig::dragThreshold();
+            if (isButton && rightButton && !press) {
+                radialState = RadialState::Idle;
+                if (beyond) {
+                    // quick flick: released before the menu was shown, decide by direction
+                    const auto items = RadialMenu::buildItems(
+                        RadialMenuConfig::commandsFor(RadialMenuConfig::contextKey())
+                    );
+                    runSlot(items, RadialMenu::slotAt(delta));
+                    suppressPopup = true;
+                    radialBlockPopup = true;
+                }
+                return false;
+            }
+            if (isButton) {
+                // a new press (lost release) or another button joined: restart or give up
+                radialState = RadialState::Idle;
+                return handleRadialMenuEvent(ev, suppressPopup);
+            }
+            if (beyond) {
+                const auto items = RadialMenu::buildItems(
+                    RadialMenuConfig::commandsFor(RadialMenuConfig::contextKey())
+                );
+                auto* menu = new RadialMenu(items, radialOrigin);
+                radialMenuWidget = menu;
+                QObject::connect(menu, &RadialMenu::cancelled, menu, [this]() {
+                    radialState = RadialState::Cancelled;
+                    closeRadialMenu();
+                });
+                menu->setCursorPos(QCursor::pos());
+                menu->show();
+                radialState = RadialState::Active;
+                radialBlockPopup = true;
+                return true;
+            }
+            return false;
+        }
+
+        case RadialState::Active:
+        case RadialState::Cancelled: {
+            // the right button release may have been lost (e.g. delivered to another widget):
+            // never keep swallowing events, otherwise navigation (e.g. middle-button orbit) breaks
+            if (!(QApplication::mouseButtons() & Qt::RightButton)
+                && !(isButton && rightButton && !press)) {
+                closeRadialMenu();
+                radialState = RadialState::Idle;
+                return false;
+            }
+            if (isButton && !rightButton) {
+                // another button joined: give up the radial menu and let navigation work
+                // (radialBlockPopup stays set, so the later right release opens no context menu)
+                closeRadialMenu();
+                radialState = RadialState::Idle;
+                return false;
+            }
+            if (isButton && rightButton && !press) {
+                auto* menu = qobject_cast<RadialMenu*>(radialMenuWidget.data());
+                if (radialState == RadialState::Active && menu) {
+                    menu->setCursorPos(QCursor::pos());
+                    const int slot = RadialMenu::slotAt(QCursor::pos() - radialOrigin);
+                    std::vector<RadialMenu::Item> items = RadialMenu::buildItems(
+                        RadialMenuConfig::commandsFor(RadialMenuConfig::contextKey())
+                    );
+                    runSlot(items, slot);
+                }
+                closeRadialMenu();
+                radialState = RadialState::Idle;
+                suppressPopup = true;
+                return false;
+            }
+            if (isMove) {
+                if (auto* menu = qobject_cast<RadialMenu*>(radialMenuWidget.data())) {
+                    menu->setCursorPos(QCursor::pos());
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 void NavigationStyle::openPopupMenu(const SbVec2s& position)
 {
+    // a right-button drag that became a radial menu gesture never opens the context menu
+    if (radialBlockPopup || radialState != RadialState::Idle) {
+        return;
+    }
+
     // store the right-click position for potential use by Clarify Selection
     rightClickPosition = position;
 

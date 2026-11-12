@@ -415,6 +415,8 @@ SOURCE_GROUP("Uic" FILES ${Gui_UIC_HDRS})
 # The command sources
 SET(Command_CPP_SRCS
     Action.cpp
+    RadialMenu.cpp
+    RadialMenuConfig.cpp
     ActionFunction.cpp
     Command.cpp
     CommandDoc.cpp
@@ -434,6 +436,8 @@ SET(Command_CPP_SRCS
 SET(Command_SRCS
     ${Command_CPP_SRCS}
     Action.h
+    RadialMenu.h
+    RadialMenuConfig.h
     ActionFunction.h
     Command.h
     CommandT.h

@@ -41,6 +41,10 @@ class GestureNavigationStyle: public UserNavigationStyle
 public:
     GestureNavigationStyle();
     ~GestureNavigationStyle() override;
+    bool supportsRadialMenu() const override
+    {
+        return false;  // right-button drag is used for navigation
+    }
     const char* mouseButtons(ViewerMode) override;
     ClarifySelectionMode clarifySelectionMode() const override
     {
