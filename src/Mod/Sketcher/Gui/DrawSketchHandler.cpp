@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <optional>
 #include <ranges>
 #include <tuple>
 #include <utility>
@@ -567,6 +568,9 @@ std::vector<QPixmap> DrawSketchHandler::suggestedConstraintsPixmaps(
             case Parallel:
                 iconType = QStringLiteral("Constraint_Parallel");
                 break;
+            case Equal:
+                iconType = QStringLiteral("Constraint_EqualLength");
+                break;
             default:
                 break;
         }
@@ -740,6 +744,7 @@ void DrawSketchHandler::seekModelReferenceAutoConstraint(
     constr.PosId = reference.posId;
     constr.ExternalObjectName = reference.objectName;
     constr.ExternalSubName = reference.subName;
+    constr.ExternalRadius = reference.radius;
 
     const bool isPoint = reference.kind == ModelReference::Kind::Point;
     if (type == AutoConstraint::VERTEX || type == AutoConstraint::VERTEX_NO_TANGENCY) {
@@ -765,6 +770,73 @@ void DrawSketchHandler::seekModelReferenceAutoConstraint(
     if (constr.Type != Sketcher::None) {
         suggestedConstraints.push_back(constr);
     }
+}
+
+double DrawSketchHandler::getCircularRadius(const Part::Geometry* geometry)
+{
+    if (const auto* circle = dynamic_cast<const Part::GeomCircle*>(geometry)) {
+        return circle->getRadius();
+    }
+    if (const auto* arc = dynamic_cast<const Part::GeomArcOfCircle*>(geometry)) {
+        return arc->getRadius();
+    }
+    return 0.0;
+}
+
+bool DrawSketchHandler::seekConcentricEqualAutoConstraint(
+    const std::vector<AutoConstraint>& centerConstraints,
+    std::vector<AutoConstraint>& rimConstraints,
+    double radius,
+    double tolerance
+)
+{
+    SketchObject* obj = sketchgui->getSketchObject();
+    if (!obj || radius <= Precision::Confusion()) {
+        return false;
+    }
+
+    // A copy: centerConstraints may be rimConstraints, which is modified below
+    std::optional<AutoConstraint> equal;
+    for (const auto& ac : centerConstraints) {
+        if (ac.Type != Sketcher::Coincident || ac.PosId != PointPos::mid) {
+            continue;
+        }
+
+        const double targetRadius = ac.isPendingExternal()
+            ? ac.ExternalRadius
+            : getCircularRadius(obj->getGeometry(ac.GeoId));
+        if (targetRadius <= Precision::Confusion() || std::fabs(targetRadius - radius) > tolerance) {
+            continue;
+        }
+
+        AutoConstraint constr = ac;
+        constr.Type = Sketcher::Equal;
+        constr.PosId = PointPos::none;
+        equal = constr;
+        break;
+    }
+
+    if (!equal) {
+        return false;
+    }
+
+    // The coincident centers and the equal radii fix the curve: tangency to it, or the curve
+    // passing through a point of it, would be redundant
+    auto isSameCurve = [&equal](const AutoConstraint& ac) {
+        if (equal->isPendingExternal()) {
+            return ac.ExternalObjectName == equal->ExternalObjectName
+                && ac.ExternalSubName == equal->ExternalSubName;
+        }
+        return !ac.isPendingExternal() && ac.GeoId == equal->GeoId;
+    };
+    std::erase_if(rimConstraints, [&isSameCurve](const AutoConstraint& ac) {
+        const bool redundant = ac.Type == Sketcher::Tangent || ac.Type == Sketcher::Equal
+            || (ac.Type == Sketcher::PointOnObject && ac.PosId == PointPos::none);
+        return redundant && isSameCurve(ac);
+    });
+
+    rimConstraints.push_back(*equal);
+    return true;
 }
 
 bool DrawSketchHandler::resolvePendingExternalAutoConstraints(
@@ -2079,6 +2151,25 @@ bool DrawSketchHandler::generateOneAutoConstraintFromSuggestion(
             else {  // regular edge to edge tangency
                 auto c = std::make_unique<Sketcher::Constraint>();
                 c->Type = Sketcher::Tangent;
+                c->First = geoId1;
+                c->Second = geoId2;
+                autoConstraints.push_back(std::move(c));
+            }
+        } break;
+        case Sketcher::Equal: {
+            // Equal radii of a circle (or arc) traced over another, see
+            // seekConcentricEqualAutoConstraint()
+            if (geoId2 == GeoEnum::GeoUndef || geoId1 == geoId2) {
+                return true;
+            }
+
+            const bool alreadyEqual = std::ranges::any_of(autoConstraints, [&](const auto& ace) {
+                return ace->Type == Sketcher::Equal && ace->involvesGeoId(geoId1)
+                    && ace->involvesGeoId(geoId2);
+            });
+            if (!alreadyEqual) {
+                auto c = std::make_unique<Sketcher::Constraint>();
+                c->Type = Sketcher::Equal;
                 c->First = geoId1;
                 c->Second = geoId2;
                 autoConstraints.push_back(std::move(c));

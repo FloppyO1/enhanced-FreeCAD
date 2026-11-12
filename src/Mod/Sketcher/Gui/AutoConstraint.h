@@ -53,6 +53,8 @@ struct AutoConstraint
      */
     std::string ExternalObjectName {};
     std::string ExternalSubName {};
+    /// Radius of the circle, if the pending model geometry is a circle whose center is referred to
+    double ExternalRadius {0.0};
 
     bool isPendingExternal() const
     {

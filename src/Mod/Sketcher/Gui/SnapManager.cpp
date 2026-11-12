@@ -493,6 +493,7 @@ bool SnapManager::snapToModel(Base::Vector2d inputPos, Base::Vector2d& snapPos)
                         acquiredCenter.subName = result.subName;
                         acquiredCenter.position = center;
                         acquiredCenter.posId = PointPos::mid;
+                        acquiredCenter.radius = circle.Radius();
 
                         Base::Vector2d radial = inputPos - center;
                         if (radial.Length() > Precision::Confusion()) {
