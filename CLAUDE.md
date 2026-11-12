@@ -10,6 +10,14 @@ Remote:
 - `fork`: repository personale (https://github.com/FloppyO1/enhanced-FreeCAD), dove si pubblicano
   i branch delle funzionalità.
 
+## Metodo di lavoro: orchestrazione con agenti
+
+Adotta sempre la skill [orchestrazione-agenti](.claude/skills/orchestrazione-agenti/SKILL.md):
+lavora come project manager che delega ai subagenti (haiku/sonnet, al massimo un opus alla
+volta), verifica tu i risultati e tiene aggiornato `STATO.md`. Nei brief per questo repository
+ricorda: build con `build-freecad.bat noupdate`, un solo job di compilazione alla volta
+(la build usa molta RAM), nessun processo lasciato appeso, e nessun commit da parte degli agenti.
+
 ## Prima di ogni nuova funzionalità: chiedere se allineare al main ufficiale
 
 Prima di iniziare a lavorare su una richiesta di nuova funzionalità, chiedi sempre se si vuole
