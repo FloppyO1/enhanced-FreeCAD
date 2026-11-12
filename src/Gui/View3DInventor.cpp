@@ -72,6 +72,7 @@
 #include "SoFCSelectionAction.h"
 #include "SoFCVectorizeSVGAction.h"
 #include "View3DInventorViewer.h"
+#include "SectionView.h"
 #include "View3DPy.h"
 #include "ViewParams.h"
 #include "ViewProvider.h"
@@ -149,6 +150,8 @@ View3DInventor::View3DInventor(
 
     stopSpinTimer = new QTimer(this);
     connect(stopSpinTimer, &QTimer::timeout, this, &View3DInventor::stopAnimating);
+
+    SectionView::installOverlayButton(this);
 
     setWindowIcon(
         Gui::BitmapFactory().iconFromTheme("Document", QIcon(Gui::BitmapFactory().pixmap("Document")))

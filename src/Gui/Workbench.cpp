@@ -770,6 +770,7 @@ MenuItem* StdWorkbench::setupMenuBar() const
           << "Std_ViewIvIssueCamPos"
           << "Std_AxisCross"
           << "Std_ToggleClipPlane"
+          << "Std_SectionView"
           << "Std_TextureMapping"
           << "Separator" << visu << "Std_ToggleNavigation"
           << "Std_RandomColor"
