@@ -238,6 +238,7 @@ void TaskExtrudeParameters::createSideControllers()
     m_side1.labelTaperAngle = ui->labelTaperAngle;
     m_side1.lengthEdit = ui->lengthEdit;
     m_side1.offsetEdit = ui->offsetEdit;
+    m_side1.buttonOffsetSign = ui->buttonOffsetSign;
     m_side1.taperEdit = ui->taperEdit;
     m_side1.lineFaceName = ui->lineFaceName;
     m_side1.buttonFace = ui->buttonFace;
@@ -264,6 +265,7 @@ void TaskExtrudeParameters::createSideControllers()
     m_side2.labelTaperAngle = ui->labelTaperAngle2;
     m_side2.lengthEdit = ui->lengthEdit2;
     m_side2.offsetEdit = ui->offsetEdit2;
+    m_side2.buttonOffsetSign = ui->buttonOffsetSign2;
     m_side2.taperEdit = ui->taperEdit2;
     m_side2.lineFaceName = ui->lineFaceName2;
     m_side2.buttonFace = ui->buttonFace2;
@@ -317,6 +319,9 @@ void TaskExtrudeParameters::connectSlots()
             this,
             [this, sideEnum](double val) { onOffsetChanged(val, sideEnum); }
         );
+        connect(side.buttonOffsetSign, &QToolButton::clicked, this, [this, sideEnum]() {
+            onOffsetSignClicked(sideEnum);
+        });
         connect(
             side.taperEdit,
             qOverload<double>(&Gui::PrefQuantitySpinBox::valueChanged),
@@ -726,9 +731,27 @@ void TaskExtrudeParameters::onStartModeChanged(int type)
     setGizmoPositions();
 }
 
+void TaskExtrudeParameters::onOffsetSignClicked(Side side)
+{
+    auto& s = getSideController(side);
+    // Negating the value triggers valueChanged, which updates the feature and the button state
+    s.offsetEdit->setValue(-s.offsetEdit->value().getValue());
+    updateOffsetSignButton(side);
+}
+
+void TaskExtrudeParameters::updateOffsetSignButton(Side side)
+{
+    auto& s = getSideController(side);
+    QSignalBlocker blocker(s.buttonOffsetSign);
+    s.buttonOffsetSign->setChecked(s.offsetEdit->value().getValue() < 0.0);
+    // An expression drives the value: the sign cannot be flipped by hand
+    s.buttonOffsetSign->setEnabled(s.offsetEdit->isEnabled() && !s.offsetEdit->hasExpression());
+}
+
 void TaskExtrudeParameters::onOffsetChanged(double len, Side side)
 {
     getSideController(side).Offset->setValue(len);
+    updateOffsetSignButton(side);
     tryRecomputeFeature();
 }
 
@@ -935,6 +958,9 @@ void TaskExtrudeParameters::updateSideUI(
     s.labelOffset->setVisible(finalOffsetVisible);
     s.offsetEdit->setVisible(finalOffsetVisible);
     s.offsetEdit->setEnabled(finalOffsetVisible);
+    s.buttonOffsetSign->setVisible(finalOffsetVisible);
+    s.buttonOffsetSign->setChecked(s.offsetEdit->value().getValue() < 0.0);
+    s.buttonOffsetSign->setEnabled(finalOffsetVisible && !s.offsetEdit->hasExpression());
 
     const bool finalTaperVisible = isParentVisible && isTaperVisible;
     s.labelTaperAngle->setVisible(finalTaperVisible);
@@ -1330,6 +1356,8 @@ void TaskExtrudeParameters::changeEvent(QEvent* e)
         QSignalBlocker length2(ui->lengthEdit2);
         QSignalBlocker offset(ui->offsetEdit);
         QSignalBlocker offset2(ui->offsetEdit2);
+        QSignalBlocker offsetSign(ui->buttonOffsetSign);
+        QSignalBlocker offsetSign2(ui->buttonOffsetSign2);
         QSignalBlocker taper(ui->taperEdit);
         QSignalBlocker taper2(ui->taperEdit2);
         QSignalBlocker xdir(ui->XDirectionEdit);

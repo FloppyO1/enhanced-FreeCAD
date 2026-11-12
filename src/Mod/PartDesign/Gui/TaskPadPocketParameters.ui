@@ -185,14 +185,58 @@
       </widget>
      </item>
      <item row="8" column="1">
-      <widget class="Gui::PrefQuantitySpinBox" name="offsetEdit" native="true">
-       <property name="keyboardTracking" stdset="0">
-        <bool>false</bool>
+      <layout class="QHBoxLayout" name="offsetLayout">
+       <property name="spacing">
+        <number>4</number>
        </property>
-       <property name="unit" stdset="0">
-        <string notr="true">mm</string>
+       <property name="leftMargin">
+        <number>0</number>
        </property>
-      </widget>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="Gui::PrefQuantitySpinBox" name="offsetEdit" native="true">
+         <property name="keyboardTracking" stdset="0">
+          <bool>false</bool>
+         </property>
+         <property name="unit" stdset="0">
+          <string notr="true">mm</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="buttonOffsetSign">
+         <property name="minimumSize">
+          <size>
+           <width>24</width>
+           <height>22</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>24</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Reverse the offset direction</string>
+         </property>
+         <property name="text">
+          <string notr="true">+/-</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
      </item>
      <item row="9" column="0">
       <widget class="QLabel" name="labelTaperAngle">
@@ -414,14 +458,58 @@
       </widget>
      </item>
      <item row="15" column="1">
-      <widget class="Gui::PrefQuantitySpinBox" name="offsetEdit2" native="true">
-       <property name="keyboardTracking" stdset="0">
-        <bool>false</bool>
+      <layout class="QHBoxLayout" name="offsetLayout2">
+       <property name="spacing">
+        <number>4</number>
        </property>
-       <property name="unit" stdset="0">
-        <string notr="true">mm</string>
+       <property name="leftMargin">
+        <number>0</number>
        </property>
-      </widget>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="Gui::PrefQuantitySpinBox" name="offsetEdit2" native="true">
+         <property name="keyboardTracking" stdset="0">
+          <bool>false</bool>
+         </property>
+         <property name="unit" stdset="0">
+          <string notr="true">mm</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="buttonOffsetSign2">
+         <property name="minimumSize">
+          <size>
+           <width>24</width>
+           <height>22</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>24</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Reverse the offset direction</string>
+         </property>
+         <property name="text">
+          <string notr="true">+/-</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
      </item>
      <item row="16" column="0">
       <widget class="QLabel" name="labelTaperAngle2">

@@ -156,6 +156,7 @@ protected:
         QLabel* labelTaperAngle = nullptr;
         Gui::PrefQuantitySpinBox* lengthEdit = nullptr;
         Gui::PrefQuantitySpinBox* offsetEdit = nullptr;
+        QToolButton* buttonOffsetSign = nullptr;
         Gui::PrefQuantitySpinBox* taperEdit = nullptr;
         QLineEdit* lineFaceName = nullptr;
         QToolButton* buttonFace = nullptr;
@@ -204,6 +205,8 @@ private:
     void onStartModeChanged(int type);
     void onStartOffsetChanged(double len);
     void onOffsetChanged(double len, Side side);
+    void onOffsetSignClicked(Side side);
+    void updateOffsetSignButton(Side side);
     void onTaperChanged(double angle, Side side);
     void onSelectFaceToggle(bool checked, Side side);
     void onSelectStartReferenceToggle(bool checked);
