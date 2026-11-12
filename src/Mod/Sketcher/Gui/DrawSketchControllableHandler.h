@@ -27,6 +27,8 @@
 
 #include <type_traits>
 
+#include <Precision.hxx>
+
 #include "DrawSketchDefaultHandler.h"
 #include "SnapManager.h"
 
@@ -83,31 +85,16 @@ public:
     void mouseMove(SnapManager::SnapHandle snapHandle) override
     {
         Base::Vector2d onSketchPos = snapHandle.compute();
-        if (!this->snapToTangentHint(onSketchPos)) {
-            this->snapToParallelPerpendicularHint(onSketchPos);
-        }
-        toolWidgetManager.mouseMoved(onSketchPos);
-
-        if (!toolWidgetManager.enforceControlParameters(onSketchPos)) {
-            return;
-        }
-        updateDataAndDrawToPosition(onSketchPos);
-        toolWidgetManager.adaptParameters(onSketchPos);
+        moveToPosition(onSketchPos);
     }
 
     bool pressButton(Base::Vector2d onSketchPos) override
     {
-        if (!this->snapToTangentHint(onSketchPos)) {
-            this->snapToParallelPerpendicularHint(onSketchPos);
-        }
         // ensure controller state is initialized even if no mouseMove occurred
         // ie. when a modal dialog blocks input before the first click
-        toolWidgetManager.mouseMoved(onSketchPos);
-        if (!toolWidgetManager.enforceControlParameters(onSketchPos)) {
+        if (!moveToPosition(onSketchPos)) {
             return false;
         }
-        updateDataAndDrawToPosition(onSketchPos);
-        toolWidgetManager.adaptParameters(onSketchPos);
 
         onButtonPressed(onSketchPos);
         return true;
@@ -121,6 +108,53 @@ public:
     }
     //@}
 
+
+private:
+    /** Updates the tool to the cursor position onSketchPos, snapped to the hints and to the
+     * suggested constraints. On return, onSketchPos is the position the tool has been updated to.
+     * Returns false if the position cannot be applied.
+     */
+    bool moveToPosition(Base::Vector2d& onSketchPos)
+    {
+        if (!this->snapToTangentHint(onSketchPos)) {
+            this->snapToParallelPerpendicularHint(onSketchPos);
+        }
+
+        this->resetSuggestedConstraintSnap();
+        if (!applyPosition(onSketchPos)) {
+            return false;
+        }
+
+        // The constraints suggested at the position are only known after updating to it. If the
+        // position is close to satisfying them, update again to the position satisfying them.
+        Base::Vector2d snapPos;
+        if (this->getSuggestedConstraintSnapPoint(snapPos)
+            && (snapPos - onSketchPos).Length() > Precision::Confusion()) {
+            const Base::Vector2d unsnappedPos = onSketchPos;
+            if (applyPosition(snapPos)) {
+                onSketchPos = snapPos;
+            }
+            else {
+                onSketchPos = unsnappedPos;
+                applyPosition(onSketchPos);
+            }
+        }
+
+        this->renderSuggestedConstraintSnapCursor(onSketchPos);
+        return true;
+    }
+
+    bool applyPosition(Base::Vector2d& onSketchPos)
+    {
+        toolWidgetManager.mouseMoved(onSketchPos);
+
+        if (!toolWidgetManager.enforceControlParameters(onSketchPos)) {
+            return false;
+        }
+        updateDataAndDrawToPosition(onSketchPos);
+        toolWidgetManager.adaptParameters(onSketchPos);
+        return true;
+    }
 
 protected:
     /** @name functions requiring specialisation */

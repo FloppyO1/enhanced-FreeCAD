@@ -67,6 +67,24 @@ public:
     }
 
     void initDragging(const std::vector<Sketcher::GeoElementId>& dragged);
+
+    /** Whether the dragged point snaps to the suggested constraints while dragging (see the
+     * preferences), instead of suggesting them only after the mouse rests. */
+    bool isSnapping(const std::vector<Sketcher::GeoElementId>& dragged) const;
+
+    /** When snapping, seeks the constraints suggested for the dragged point and returns the
+     * cursor position that moves the point onto the position satisfying them. The crosshair is
+     * drawn on that position. Otherwise returns cursorPos.
+     *
+     * dragStart and relative are those of the drag: with a relative drag the point moves by
+     * the displacement of the cursor from dragStart, otherwise it moves onto the cursor.
+     */
+    Base::Vector2d snap(
+        const std::vector<Sketcher::GeoElementId>& dragged,
+        const Base::Vector2d& cursorPos,
+        const Base::Vector2d& dragStart,
+        bool relative
+    );
     void update(const std::vector<Sketcher::GeoElementId>& dragged, const Base::Vector2d& pos);
     void create(const std::vector<Sketcher::GeoElementId>& dragged);
     void clear();
@@ -87,6 +105,19 @@ private:
     void removeInvalidConstraints(const Sketcher::GeoElementId& dragged);
     void onDwellTimerTimeout();
     void updateSuggestions();
+    /** Suggestions for the dragged point at pointPos, among the geometry as before the drag, or
+     * to the element of the 3D model if given (pointPos is then on that element). */
+    void seekSnapSuggestions(
+        const Sketcher::GeoElementId& dragged,
+        const Base::Vector2d& pointPos,
+        double snapDistance,
+        const ModelReference* model = nullptr
+    );
+    /// Direction of the dragged line if its dragged end point were at pointPos, else zero
+    Base::Vector2d getDraggedLineDirection(
+        const Sketcher::GeoElementId& dragged,
+        const Base::Vector2d& pointPos
+    ) const;
 
 private:
     std::vector<AutoConstraint> suggestedConstraints;

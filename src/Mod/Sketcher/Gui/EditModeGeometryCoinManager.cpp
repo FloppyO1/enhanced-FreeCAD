@@ -24,7 +24,11 @@
 
 #include <FCConfig.h>
 
+#include <cmath>
 #include <memory>
+#include <set>
+#include <utility>
+#include <vector>
 
 #include <Inventor/SbVec3f.h>
 #include <Inventor/nodes/SoCoordinate3.h>
@@ -614,6 +618,57 @@ void EditModeGeometryCoinManager::updateGeometryColor(
     editModeScenegraphNodes.OriginPointMaterialOccluded->diffuseColor.setValue(
         editModeScenegraphNodes.OriginPointMaterial->diffuseColor[0]
     );
+
+    updateExternalOverlapRings();
+}
+
+void EditModeGeometryCoinManager::updateExternalOverlapRings()
+{
+    // Points closer than this are considered at the same position
+    constexpr double tolerance = 1e-6;
+    auto key = [](float x, float y) {
+        return std::make_pair(std::llround(x / tolerance), std::llround(y / tolerance));
+    };
+
+    std::set<std::pair<long long, long long>> externalPoints;
+    std::vector<SbVec3f> sketchPoints;
+
+    for (auto l = 0; l < geometryLayerParameters.getCoinLayerCount(); l++) {
+        const SoMFVec3f& points = editModeScenegraphNodes.PointsCoordinate[l]->point;
+        for (int i = 0; i < points.getNum(); i++) {
+            if (!coinMapping.isValidPointId(i, l)) {
+                continue;
+            }
+
+            const int GeoId = coinMapping.getPointGeoId(i, l);
+            if (GeoId <= Sketcher::GeoEnum::RefExt) {
+                externalPoints.insert(key(points[i][0], points[i][1]));
+            }
+            else if (GeoId >= 0) {
+                sketchPoints.push_back(points[i]);
+            }
+        }
+    }
+
+    auto viewOrientationFactor = ViewProviderSketchCoinAttorney::getViewOrientationFactor(viewProvider);
+
+    std::vector<SbVec3f> rings;
+    for (const auto& point : sketchPoints) {
+        if (externalPoints.contains(key(point[0], point[1]))) {
+            rings.emplace_back(point[0], point[1], viewOrientationFactor * drawingParameters.zEdit);
+        }
+    }
+
+    editModeScenegraphNodes.ExternalOverlapMaterials->diffuseColor
+        = drawingParameters.CurveExternalColor;
+    editModeScenegraphNodes.ExternalOverlapCoordinate->point.setNum(static_cast<int>(rings.size()));
+    if (!rings.empty()) {
+        editModeScenegraphNodes.ExternalOverlapCoordinate->point.setValues(
+            0,
+            static_cast<int>(rings.size()),
+            rings.data()
+        );
+    }
 }
 
 void EditModeGeometryCoinManager::updateGeometryLayersConfiguration()

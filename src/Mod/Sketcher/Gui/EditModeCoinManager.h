@@ -26,7 +26,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <optional>
 #include <vector>
 
 #include <App/Application.h>
@@ -37,6 +36,7 @@
 #include "EditModeCoinManagerParameters.h"
 
 
+class QImage;
 class SbVec3f;
 class SbVec2s;
 class SoRayPickAction;
@@ -265,6 +265,9 @@ public:
     /** @name Temporary edit curves and markers */
     //@{
     void drawEditMarkers(const std::vector<Base::Vector2d>& EditMarkers, unsigned int augmentationlevel);
+    /** Draws image (a cursor crosshair, whose hot spot is its center) at position on the
+     * sketch, unscaled. Without position, removes it. */
+    void drawSnapCrosshair(const std::vector<Base::Vector2d>& position, const QImage& image);
     void drawEdit(const std::vector<Base::Vector2d>& EditCurve, GeometryCreationMode mode);
     void drawEdit(const std::list<std::vector<Base::Vector2d>>& list, GeometryCreationMode mode);
     void updateEditCurveAppearance(GeometryCreationMode mode);

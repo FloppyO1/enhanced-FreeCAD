@@ -30,6 +30,8 @@
 #include <memory>
 #include <ranges>
 
+#include <QImage>
+
 #include <Inventor/SbVec2f.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
@@ -49,9 +51,12 @@
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoText2.h>
 #include <Inventor/nodes/SoTranslation.h>
+#include <Inventor/nodes/SoSwitch.h>
+#include <Inventor/nodes/SoImage.h>
 
 #include <Base/Converter.h>
 #include <Base/Exception.h>
+#include <Gui/BitmapFactory.h>
 #include <Gui/Inventor/MarkerBitmaps.h>
 #include <Gui/Inventor/SoFCBoundingBox.h>
 #include <Gui/Utilities.h>
@@ -1034,6 +1039,30 @@ void EditModeCoinManager::drawEditMarkers(
     editModeScenegraphNodes.EditMarkerSet->markerIndex.finishEditing();
 }
 
+void EditModeCoinManager::drawSnapCrosshair(
+    const std::vector<Base::Vector2d>& position,
+    const QImage& image
+)
+{
+    if (position.empty() || image.isNull()) {
+        editModeScenegraphNodes.SnapCrosshairSwitch->whichChild = SO_SWITCH_NONE;
+        return;
+    }
+
+    if (image.cacheKey() != editModeScenegraphNodes.SnapCrosshairImageKey) {
+        Gui::BitmapFactory().convert(image, editModeScenegraphNodes.SnapCrosshairImage->image);
+        editModeScenegraphNodes.SnapCrosshairImageKey = image.cacheKey();
+    }
+
+    editModeScenegraphNodes.SnapCrosshairTranslation->translation.setValue(
+        static_cast<float>(position.front().x),
+        static_cast<float>(position.front().y),
+        ViewProviderSketchCoinAttorney::getViewOrientationFactor(viewProvider)
+            * drawingParameters.zEdit
+    );
+    editModeScenegraphNodes.SnapCrosshairSwitch->whichChild = 0;
+}
+
 void EditModeCoinManager::drawEdit(const std::vector<Base::Vector2d>& EditCurve, GeometryCreationMode mode)
 {
     editModeScenegraphNodes.EditCurveSet->numVertices.setNum(1);
@@ -1968,6 +1997,57 @@ void EditModeCoinManager::createEditModeInventorNodes()
     editModeScenegraphNodes.EditMarkerSet->markerIndex
         = Gui::Inventor::MarkerBitmaps::getMarkerIndex("CIRCLE_LINE", drawingParameters.markerSize);
     editMarkersRoot->addChild(editModeScenegraphNodes.EditMarkerSet);
+
+    // stuff for the crosshair on the snapped position ++++++++++++++++++++++
+    editModeScenegraphNodes.SnapCrosshairSwitch = new SoSwitch;
+    editModeScenegraphNodes.SnapCrosshairSwitch->setName("SnapCrosshairSwitch");
+    editModeScenegraphNodes.SnapCrosshairSwitch->whichChild = SO_SWITCH_NONE;
+    editModeScenegraphNodes.EditRoot->addChild(editModeScenegraphNodes.SnapCrosshairSwitch);
+
+    SoSeparator* snapCrosshairRoot = new SoSeparator;
+    SoPickStyle* snapCrosshairPickStyle = new SoPickStyle();
+    snapCrosshairPickStyle->style.setValue(SoPickStyle::UNPICKABLE);
+    snapCrosshairRoot->addChild(snapCrosshairPickStyle);
+    editModeScenegraphNodes.SnapCrosshairSwitch->addChild(snapCrosshairRoot);
+
+    editModeScenegraphNodes.SnapCrosshairTranslation = new SoTranslation;
+    snapCrosshairRoot->addChild(editModeScenegraphNodes.SnapCrosshairTranslation);
+
+    editModeScenegraphNodes.SnapCrosshairImage = new SoImage;
+    editModeScenegraphNodes.SnapCrosshairImage->vertAlignment = SoImage::HALF;
+    editModeScenegraphNodes.SnapCrosshairImage->horAlignment = SoImage::CENTER;
+    snapCrosshairRoot->addChild(editModeScenegraphNodes.SnapCrosshairImage);
+
+    // stuff for the rings marking points over external points ++++++++++++++
+    SoSeparator* externalOverlapRoot = new SoSeparator;
+    externalOverlapRoot->setName("ExternalOverlapRoot");
+    SoPickStyle* externalOverlapPickStyle = new SoPickStyle();
+    externalOverlapPickStyle->style.setValue(SoPickStyle::UNPICKABLE);
+    externalOverlapRoot->addChild(externalOverlapPickStyle);
+    editModeScenegraphNodes.EditRoot->addChild(externalOverlapRoot);
+
+    editModeScenegraphNodes.ExternalOverlapMaterials = new SoMaterial;
+    editModeScenegraphNodes.ExternalOverlapMaterials->setName("ExternalOverlapMaterials");
+    externalOverlapRoot->addChild(editModeScenegraphNodes.ExternalOverlapMaterials);
+
+    editModeScenegraphNodes.ExternalOverlapCoordinate = new SoCoordinate3;
+    editModeScenegraphNodes.ExternalOverlapCoordinate->setName("ExternalOverlapCoordinate");
+    editModeScenegraphNodes.ExternalOverlapCoordinate->point.setNum(0);
+    externalOverlapRoot->addChild(editModeScenegraphNodes.ExternalOverlapCoordinate);
+
+    // One size larger than the points, so that the ring surrounds them
+    int ringSize = drawingParameters.markerSize;
+    for (int size : Gui::Inventor::MarkerBitmaps::getSupportedSizes("CIRCLE_LINE")) {
+        if (size > drawingParameters.markerSize) {
+            ringSize = size;
+            break;
+        }
+    }
+    editModeScenegraphNodes.ExternalOverlapSet = new SoMarkerSet;
+    editModeScenegraphNodes.ExternalOverlapSet->setName("ExternalOverlapSet");
+    editModeScenegraphNodes.ExternalOverlapSet->markerIndex
+        = Gui::Inventor::MarkerBitmaps::getMarkerIndex("CIRCLE_LINE", ringSize);
+    externalOverlapRoot->addChild(editModeScenegraphNodes.ExternalOverlapSet);
 
     // stuff for the edit coordinates ++++++++++++++++++++++++++++++++++++++
     SoSeparator* Coordsep = new SoSeparator();

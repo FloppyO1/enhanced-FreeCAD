@@ -28,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <ranges>
 
 #include <QTimer>
 #include <QWidget>
@@ -109,7 +110,272 @@ void DrawSketchHandlerDragAutoConstraint::clear()
     dwellTimer.stop();
     suggestedConstraints.clear();
     draggedElements.clear();
+
+    // Remove the crosshair drawn on the snapped position, if any
+    resetSuggestedConstraintSnap();
+    renderSuggestedConstraintSnapCursor(startPos);
+
     unsetCursor();
+}
+
+bool DrawSketchHandlerDragAutoConstraint::isSnapping(const std::vector<GeoElementId>& dragged) const
+{
+    return canSuggestFor(dragged) && getSuggestedConstraintSnapDistance() > 0.0;
+}
+
+Base::Vector2d DrawSketchHandlerDragAutoConstraint::getDraggedLineDirection(
+    const GeoElementId& dragged,
+    const Base::Vector2d& pointPos
+) const
+{
+    SketchObject* obj = sketchgui->getSketchObject();
+    const Part::Geometry* geometry = obj ? obj->getGeometry(dragged.GeoId) : nullptr;
+    if (!geometry || !geometry->is<Part::GeomLineSegment>()
+        || (dragged.Pos != PointPos::start && dragged.Pos != PointPos::end)) {
+        return Base::Vector2d(0.0, 0.0);
+    }
+
+    const auto* line = static_cast<const Part::GeomLineSegment*>(geometry);
+    const Base::Vector2d otherEnd = toVector2d(
+        dragged.Pos == PointPos::start ? line->getEndPoint() : line->getStartPoint()
+    );
+    return pointPos - otherEnd;
+}
+
+void DrawSketchHandlerDragAutoConstraint::seekSnapSuggestions(
+    const GeoElementId& dragged,
+    const Base::Vector2d& pointPos,
+    double snapDistance,
+    const ModelReference* model
+)
+{
+    suggestedConstraints.clear();
+
+    SketchObject* obj = sketchgui->getSketchObject();
+    if (!obj) {
+        return;
+    }
+
+    if (model) {
+        // The model element is imported as external geometry when the constraint is created
+        AutoConstraint constr;
+        constr.Type = None;
+        constr.GeoId = GeoEnum::GeoUndef;
+        constr.PosId = model->posId;
+        constr.ExternalObjectName = model->objectName;
+        constr.ExternalSubName = model->subName;
+        switch (model->kind) {
+            case ModelReference::Kind::Point:
+                constr.Type = Coincident;
+                break;
+            case ModelReference::Kind::Edge:
+                constr.Type = PointOnObject;
+                break;
+            case ModelReference::Kind::EdgeMidpoint:
+                constr.Type = Symmetric;
+                break;
+            default:
+                break;
+        }
+        if (constr.Type != None) {
+            suggestedConstraints.push_back(constr);
+        }
+    }
+
+    // Candidates already constrained to the dragged point move with it: they are no targets
+    auto isCandidate = [&](ConstraintType type, int geoId, PointPos posId) {
+        AutoConstraint candidate;
+        candidate.Type = type;
+        candidate.GeoId = geoId;
+        candidate.PosId = posId;
+        return geoId != dragged.GeoId && !isExistingConstraint(dragged, candidate);
+    };
+
+    // Vertices first, including the origin
+    int bestGeoId = GeoEnum::GeoUndef;
+    if (model) {
+        snapDistance = 0.0;  // The position is fixed by the model element
+    }
+    PointPos bestPosId = PointPos::none;
+    double bestDistance = snapDistance;
+
+    if (pointPos.Length() < bestDistance && isCandidate(Coincident, GeoEnum::RtPnt, PointPos::start)) {
+        bestDistance = pointPos.Length();
+        bestGeoId = GeoEnum::RtPnt;
+        bestPosId = PointPos::start;
+    }
+
+    for (int vertexIndex = 0; vertexIndex <= obj->getHighestVertexIndex(); ++vertexIndex) {
+        int geoId = GeoEnum::GeoUndef;
+        PointPos posId = PointPos::none;
+        obj->getGeoVertexIndex(vertexIndex, geoId, posId);
+        if (geoId == GeoEnum::GeoUndef) {
+            continue;
+        }
+
+        const double distance = (pointPos - toVector2d(obj->getPoint(geoId, posId))).Length();
+        if (distance < bestDistance && isCandidate(Coincident, geoId, posId)) {
+            bestDistance = distance;
+            bestGeoId = geoId;
+            bestPosId = posId;
+        }
+    }
+
+    if (bestGeoId != GeoEnum::GeoUndef) {
+        addAutoConstraint(Coincident, bestGeoId, bestPosId);
+    }
+    else {
+        // Curves, including the axes
+        bool lineCenter = false;
+
+        auto considerCurve = [&](int geoId, const Base::Vector2d& closest, bool isLineCenter) {
+            const double distance = (pointPos - closest).Length();
+            if (distance < bestDistance && isCandidate(PointOnObject, geoId, PointPos::none)) {
+                bestDistance = distance;
+                bestGeoId = geoId;
+                lineCenter = isLineCenter;
+            }
+        };
+
+        considerCurve(GeoEnum::HAxis, Base::Vector2d(pointPos.x, 0.0), false);
+        considerCurve(GeoEnum::VAxis, Base::Vector2d(0.0, pointPos.y), false);
+
+        auto considerGeometry = [&](int geoId) {
+            const Part::Geometry* geo = obj->getGeometry(geoId);
+            if (const auto* line = dynamic_cast<const Part::GeomLineSegment*>(geo)) {
+                const Base::Vector2d a = toVector2d(line->getStartPoint());
+                const Base::Vector2d ab = toVector2d(line->getEndPoint()) - a;
+                const double len2 = ab * ab;
+                if (len2 <= Precision::SquareConfusion()) {
+                    return;
+                }
+                const double t = std::clamp(((pointPos - a) * ab) / len2, 0.0, 1.0);
+                const Base::Vector2d midpoint = a + ab * 0.5;
+                const bool isLineCenter = (pointPos - midpoint).Length() < ab.Length() * 0.05;
+                considerCurve(geoId, a + ab * t, isLineCenter);
+            }
+            else if (const auto* curve = dynamic_cast<const Part::GeomCurve*>(geo)) {
+                try {
+                    double parameter = 0.0;
+                    if (curve->closestParameter(toVector3d(pointPos), parameter)) {
+                        considerCurve(geoId, toVector2d(curve->pointAtParameter(parameter)), false);
+                    }
+                }
+                catch (const Base::Exception&) {
+                }
+            }
+        };
+
+        for (int geoId = 0; geoId <= obj->getHighestCurveIndex(); ++geoId) {
+            considerGeometry(geoId);
+        }
+        for (int geoId = GeoEnum::RefExt; geoId >= -obj->getExternalGeometryCount(); --geoId) {
+            considerGeometry(geoId);
+        }
+
+        if (bestGeoId != GeoEnum::GeoUndef) {
+            addAutoConstraint(lineCenter ? Symmetric : PointOnObject, bestGeoId);
+        }
+    }
+
+    // Horizontal or vertical dragged line
+    const Base::Vector2d dir = getDraggedLineDirection(dragged, pointPos);
+    if (isOffsetAlongDirection(dir, Base::Vector2d(1.0, 0.0))) {
+        addAutoConstraint(Horizontal, GeoEnum::GeoUndef);
+    }
+    else if (isOffsetAlongDirection(dir, Base::Vector2d(0.0, 1.0))) {
+        addAutoConstraint(Vertical, GeoEnum::GeoUndef);
+    }
+
+    removeInvalidConstraints(dragged);
+}
+
+Base::Vector2d DrawSketchHandlerDragAutoConstraint::snap(
+    const std::vector<GeoElementId>& dragged,
+    const Base::Vector2d& cursorPos,
+    const Base::Vector2d& dragStart,
+    bool relative
+)
+{
+    if (!isSnapping(dragged)) {
+        return cursorPos;
+    }
+
+    dwellTimer.stop();
+    draggedElements = dragged;
+    const GeoElementId& draggedPoint = dragged.front();
+    const double snapDistance = getSuggestedConstraintSnapDistance();
+
+    // Position of the dragged point for a cursor position, and conversely
+    auto toPoint = [&](const Base::Vector2d& cursor) {
+        return relative ? startPos + (cursor - dragStart) : cursor;
+    };
+    auto toCursor = [&](const Base::Vector2d& point) {
+        return relative ? dragStart + (point - startPos) : point;
+    };
+
+    Base::Vector2d pointPos = toPoint(cursorPos);
+    if (!hasMoved(pointPos)) {
+        clear();
+        draggedElements = dragged;
+        return cursorPos;
+    }
+
+    // Element of the 3D model the cursor is snapped to. As when drawing, a vertex of the sketch
+    // nearby has precedence over an edge of the model.
+    const ModelReference& model = getSnappedModelReference();
+    if (model.isValid() && (cursorPos - model.position).Length() <= Precision::Confusion()) {
+        seekSnapSuggestions(draggedPoint, model.position, snapDistance);
+        const bool nearSketchVertex = std::ranges::any_of(
+            suggestedConstraints,
+            [](const AutoConstraint& ac) { return ac.Type == Coincident; }
+        );
+
+        if (model.kind == ModelReference::Kind::Point || !nearSketchVertex) {
+            pointPos = model.position;
+            seekSnapSuggestions(draggedPoint, pointPos, snapDistance, &model);
+            updateSuggestedConstraintSnap(
+                suggestedConstraints,
+                pointPos,
+                getDraggedLineDirection(draggedPoint, pointPos)
+            );
+            renderSuggestConstraintsCursor(suggestedConstraints);
+            renderSuggestedConstraintSnapCursor(pointPos);
+            return toCursor(pointPos);
+        }
+        pointPos = model.position;
+    }
+
+    seekSnapSuggestions(draggedPoint, pointPos, snapDistance);
+    updateSuggestedConstraintSnap(
+        suggestedConstraints,
+        pointPos,
+        getDraggedLineDirection(draggedPoint, pointPos)
+    );
+
+    Base::Vector2d snapPos;
+    if (getSuggestedConstraintSnapPoint(snapPos)) {
+        // The constraints as suggested where the point is snapped to
+        pointPos = snapPos;
+        seekSnapSuggestions(draggedPoint, pointPos, snapDistance);
+        updateSuggestedConstraintSnap(
+            suggestedConstraints,
+            pointPos,
+            getDraggedLineDirection(draggedPoint, pointPos)
+        );
+    }
+
+    if (suggestedConstraints.empty()) {
+        resetSuggestedConstraintSnap();
+        renderSuggestedConstraintSnapCursor(pointPos);
+        unsetCursor();
+    }
+    else {
+        renderSuggestConstraintsCursor(suggestedConstraints);
+        renderSuggestedConstraintSnapCursor(pointPos);
+    }
+
+    return toCursor(pointPos);
 }
 
 bool DrawSketchHandlerDragAutoConstraint::hasMoved(const Base::Vector2d& actualPos) const
@@ -225,6 +491,11 @@ void DrawSketchHandlerDragAutoConstraint::update(
 )
 {
     dwellTimer.stop();
+    if (isSnapping(draggedElements)) {
+        this->draggedElements = draggedElements;
+        return;  // The suggestions follow the dragged point, see snap()
+    }
+
     suggestedConstraints.clear();
     unsetCursor();
 
@@ -444,6 +715,9 @@ void DrawSketchHandlerDragAutoConstraint::create(const std::vector<GeoElementId>
     if (!obj) {
         return;
     }
+
+    // Import the elements of the 3D model the suggestions refer to, within the drag command
+    resolvePendingExternalAutoConstraints(suggestedConstraints);
 
     std::vector<std::unique_ptr<Constraint>> autoConstraints;
 

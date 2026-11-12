@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <Mod/Sketcher/App/Constraint.h>
 
 namespace SketcherGui
@@ -42,6 +44,20 @@ struct AutoConstraint
     Sketcher::ConstraintType Type;
     int GeoId;
     Sketcher::PointPos PosId;
+
+    /** Model geometry (outside of the sketch) that the constraint refers to and that is not yet
+     * imported as external geometry. While set, GeoId is GeoUndef and PosId refers to the
+     * geometry that importing ExternalObjectName.ExternalSubName will create. The reference is
+     * imported, and GeoId resolved, only when the constraint is actually created, see
+     * DrawSketchHandler::resolvePendingExternalAutoConstraints().
+     */
+    std::string ExternalObjectName {};
+    std::string ExternalSubName {};
+
+    bool isPendingExternal() const
+    {
+        return !ExternalSubName.empty();
+    }
 };
 
 }  // namespace SketcherGui

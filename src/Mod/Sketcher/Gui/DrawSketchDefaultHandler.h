@@ -25,6 +25,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <vector>
+
 #include <Inventor/events/SoKeyboardEvent.h>
 
 #include <Base/Exception.h>
@@ -519,6 +522,8 @@ protected:
             resetPositionText();
 
             try {
+                resolvePendingModelReferences();
+
                 executeCommands();
 
                 if (sugConstraints.size() > 0) {
@@ -685,6 +690,23 @@ protected:
         See documentation of the functions above*/
     //@{
 
+    /** @brief Imports as external geometry the model elements that suggested constraints refer
+     * to, so that the suggestions refer to sketch GeoIds like any other suggestion.
+     *
+     * It is done before the geometry is created, as importing external geometry requires a
+     * recompute, in a single command.
+     *
+     * Tools that keep a command open while drawing (e.g. polyline) generate their constraints
+     * while drawing, see generateAutoConstraintsOnElement(). Their remaining suggestions are
+     * those of the cursor at the end, which must not be imported.
+     */
+    void resolvePendingModelReferences()
+    {
+        if (!sketchgui->getDocument()->hasPendingCommand()) {
+            resolvePendingExternalAutoConstraints(sugConstraints);
+        }
+    }
+
     /** @brief Convenience function to automatically generate and add to the AutoConstraints vector
      *  the suggested constraints.
      *
@@ -700,7 +722,11 @@ protected:
             return;
         }
 
-        for (auto& ac : autoConstrs) {
+        // Tools generating constraints while drawing (e.g. polyline) still have model references
+        std::vector<AutoConstraint> resolvedConstrs = autoConstrs;
+        resolvePendingExternalAutoConstraints(resolvedConstrs);
+
+        for (auto& ac : resolvedConstrs) {
             if (!generateOneAutoConstraintFromSuggestion(ac, geoId1, posId1, AutoConstraints)) {
                 return;
             }

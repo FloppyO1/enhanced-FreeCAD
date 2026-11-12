@@ -113,6 +113,8 @@ private:
     void createGeometryRootNodes();
     void emptyGeometryRootNodes();
     void createEditModePointInventorNodes();
+    /// Rings around the points of the sketch lying over a point of external geometry
+    void updateExternalOverlapRings();
     void createEditModeCurveInventorNodes();
 
 private:

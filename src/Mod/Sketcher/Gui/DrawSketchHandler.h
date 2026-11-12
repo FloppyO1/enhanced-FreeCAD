@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <QImage>
 #include <QPixmap>
 #include <QCoreApplication>
 
@@ -129,6 +130,11 @@ private:
         const std::vector<Base::Vector2d>& EditMarkers,
         unsigned int augmentationlevel = 0
     );
+    static inline void drawSnapCrosshair(
+        ViewProviderSketch& vp,
+        const std::vector<Base::Vector2d>& position,
+        const QImage& image
+    );
     static inline void setAxisPickStyle(ViewProviderSketch& vp, bool on);
     static inline void moveCursorToSketchPoint(ViewProviderSketch& vp, Base::Vector2d point);
     static inline void ensureFocus(ViewProviderSketch& vp);
@@ -142,6 +148,8 @@ private:
     static inline int getPreselectPoint(const ViewProviderSketch& vp);
     static inline int getPreselectCurve(const ViewProviderSketch& vp);
     static inline int getPreselectCross(const ViewProviderSketch& vp);
+    static inline const ModelReference& getModelReference(const ViewProviderSketch& vp);
+    static inline double getSuggestedConstraintSnapDistance(const ViewProviderSketch& vp);
 
     static inline void moveConstraint(
         ViewProviderSketch& vp,
@@ -233,6 +241,16 @@ public:
         Sketcher::PointPos pointPos = Sketcher::PointPos::none,
         bool createowncommand = true
     );
+
+    /** Imports, as external geometry, the model elements that suggested constraints refer to
+     * (see AutoConstraint::isPendingExternal()) and replaces the references with the GeoIds
+     * of the imported geometry. Suggestions whose element cannot be imported are removed.
+     *
+     * The import is part of the command currently open, if any, otherwise of an own command.
+     * Returns whether any external geometry was involved.
+     */
+    bool resolvePendingExternalAutoConstraints(std::vector<AutoConstraint>& autoConstrs);
+    bool resolvePendingExternalAutoConstraints(std::vector<std::vector<AutoConstraint>>& autoConstrLists);
 
     void setPositionText(const Base::Vector2d& Pos, const SbString& text);
     void setPositionText(const Base::Vector2d& Pos);
@@ -395,6 +413,15 @@ protected:
         AutoConstraint::TargetType type
     );
 
+    void resolvePendingExternalAutoConstraintList(std::vector<AutoConstraint>& autoConstrs);
+
+    /// Suggests a constraint to the model element (outside the sketch) Pos was snapped to
+    void seekModelReferenceAutoConstraint(
+        std::vector<AutoConstraint>& constraints,
+        const Base::Vector2d& Pos,
+        AutoConstraint::TargetType type
+    );
+
     bool seekLineExtensionAutoConstraint(
         std::vector<AutoConstraint>& constraints,
         const Base::Vector2d& Pos,
@@ -415,6 +442,42 @@ protected:
     void renderDirectionalAutoConstraintHints() const;
     bool isDirectionCloseToTangentHint(const Base::Vector2d& direction) const;
     bool snapToTangentHint(Base::Vector2d& point);
+
+    /** @name Snapping to suggested constraints
+     *
+     * When enabled in the preferences, positions within the snap distance of satisfying a
+     * suggested constraint are moved onto the position that satisfies it. The crosshair is then
+     * drawn on the snapped position instead of under the mouse.
+     */
+    //@{
+    /// Snap distance in sketch units, or 0 if snapping to suggested constraints is disabled
+    double getSuggestedConstraintSnapDistance() const;
+    /// Element of the 3D model the last snapped position was snapped to, if any
+    const ModelReference& getSnappedModelReference() const;
+    /** Returns whether offset (from a reference point) is close to the line through that point
+     * along direction (in either sense): within the snap distance if snapping to suggested
+     * constraints is enabled, otherwise within a small angle. */
+    bool isOffsetAlongDirection(const Base::Vector2d& offset, const Base::Vector2d& direction) const;
+    /// Sketch element (vertex or curve) within the snap distance of Pos, as preselection data
+    bool findNearbySketchElement(
+        const Base::Vector2d& Pos,
+        AutoConstraint::TargetType type,
+        PreselectionData& nearby
+    ) const;
+    void resetSuggestedConstraintSnap();
+    /// Computes, from the suggested constraints found at Pos, the position satisfying them
+    void updateSuggestedConstraintSnap(
+        const std::vector<AutoConstraint>& suggestedConstraints,
+        const Base::Vector2d& Pos,
+        const Base::Vector2d& Dir
+    );
+    /// Position satisfying the constraints suggested by the last seekAutoConstraint(), if any
+    bool getSuggestedConstraintSnapPoint(Base::Vector2d& point) const;
+    /** If position satisfies the suggested constraints, draws the crosshair on position in the
+     * view and removes it from the cursor, which keeps the icons of the suggested constraints.
+     * The mouse itself is never moved. */
+    void renderSuggestedConstraintSnapCursor(const Base::Vector2d& position);
+    //@}
 
     bool isLineCenterAutoConstraint(int GeoId, const Base::Vector2d& Pos) const;
 
@@ -444,6 +507,19 @@ protected:
 private:
     LineExtensionAutoConstraintHint lineExtensionAutoConstraintHint;
     TangentAutoConstraintHint tangentAutoConstraintHint;
+    struct SuggestedConstraintSnap
+    {
+        bool isValid = false;
+        Base::Vector2d point;
+    };
+    SuggestedConstraintSnap suggestedConstraintSnap;
+    /// Whether the crosshair is drawn in the view on the snapped position
+    bool suggestedConstraintSnapCrosshairDrawn {false};
+    /// Image of the crosshair drawn in the view, and the cursor pixmap it was made from
+    QImage snapCrosshairImage;
+    qint64 snapCrosshairSourceKey {0};
+    /// Whether the crosshair has been removed from the cursor
+    bool suggestedConstraintSnapCursorApplied {false};
     int parallelPerpendicularRefGeoId {Sketcher::GeoEnum::GeoUndef};
     int parallelPerpendicularActiveHintLine {-1};
     bool parallelPerpendicularRefFromEndpoint {false};
