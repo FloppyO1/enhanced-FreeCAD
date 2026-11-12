@@ -232,6 +232,9 @@ public:
 
     void setPopupMenuEnabled(bool on);
     bool isPopupMenuEnabled() const;
+    /// True after a right-button drag turned into a radial menu gesture, until the next right
+    /// press. Every right-click menu / right-click action in the 3D view must check this.
+    bool isRadialGestureActive() const;
 
     void setFeedbackVisibility(bool enable);
     bool isFeedbackVisible() const;

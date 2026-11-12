@@ -38,6 +38,8 @@
 #include <QEvent>
 #include <QAction>
 #include <QObject>
+#include <QPoint>
+#include <QPointer>
 #include <Base/BaseClass.h>
 #include <Base/SmartPtrPy.h>
 #include <Gui/Namespace.h>
@@ -287,6 +289,15 @@ public:
 
     void setPopupMenuEnabled(const SbBool on);
     SbBool isPopupMenuEnabled() const;
+    /**
+     * True from the moment a right-button drag became a radial menu gesture until the next
+     * right-button press. While true, nothing in the 3D view (edit view providers, tools, ...)
+     * may open a context menu or act on the right-button release of that gesture.
+     */
+    bool isRadialGestureActive() const
+    {
+        return radialBlockPopup || radialState != RadialState::Idle;
+    }
 
     void startSelection(AbstractMouseSelection*);
     void startSelection(SelectionMode = Lasso);
@@ -367,7 +378,29 @@ protected:
     void syncWithEvent(const SoEvent* const ev);
     virtual void openPopupMenu(const SbVec2s& position);
 
+    /**
+     * Whether the right mouse button can be used to drag out the radial menu. Navigation styles
+     * that use a plain right-button drag for viewing return false.
+     */
+    virtual bool supportsRadialMenu() const;
+
 private:
+    enum class RadialState
+    {
+        Idle,
+        Pending,
+        Active,
+        Cancelled
+    };
+    bool handleRadialMenuEvent(const SoEvent* ev, bool& suppressPopup);
+    void closeRadialMenu();
+    RadialState radialState {RadialState::Idle};
+    QPoint radialOrigin;
+    QPointer<QWidget> radialMenuWidget;
+    // set when a right-button gesture became a radial menu gesture; blocks the classic context
+    // menu until the next right-button press, whatever path tries to open it
+    bool radialBlockPopup {false};
+
     struct OrbitDragState
     {
         SbVec3f center;
@@ -610,6 +643,10 @@ class GuiExport MayaGestureNavigationStyle: public UserNavigationStyle
 public:
     MayaGestureNavigationStyle();
     ~MayaGestureNavigationStyle() override;
+    bool supportsRadialMenu() const override
+    {
+        return false;  // right-button drag is used for navigation
+    }
     const char* mouseButtons(ViewerMode) override;
 
 protected:
@@ -675,6 +712,10 @@ class GuiExport OpenSCADNavigationStyle: public UserNavigationStyle
 public:
     OpenSCADNavigationStyle();
     ~OpenSCADNavigationStyle() override;
+    bool supportsRadialMenu() const override
+    {
+        return false;  // right-button drag is used for navigation
+    }
     const char* mouseButtons(ViewerMode) override;
     ClarifySelectionMode clarifySelectionMode() const override
     {
@@ -694,6 +735,10 @@ class GuiExport TinkerCADNavigationStyle: public UserNavigationStyle
 public:
     TinkerCADNavigationStyle();
     ~TinkerCADNavigationStyle() override;
+    bool supportsRadialMenu() const override
+    {
+        return false;  // right-button drag is used for navigation
+    }
     const char* mouseButtons(ViewerMode) override;
 
 protected:

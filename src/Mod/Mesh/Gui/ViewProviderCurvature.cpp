@@ -465,7 +465,7 @@ void ViewProviderMeshCurvature::curvatureInfoCallback(void* ud, SoEventCallback*
         // Mark all incoming mouse button events as handled, especially, to deactivate the
         // selection node
         n->getAction()->setHandled();
-        if (mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP) {
+        if (mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP && !view->isRadialGestureActive()) {
             n->setHandled();
             // context-menu
             QMenu menu;

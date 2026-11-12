@@ -415,6 +415,8 @@ SOURCE_GROUP("Uic" FILES ${Gui_UIC_HDRS})
 # The command sources
 SET(Command_CPP_SRCS
     Action.cpp
+    RadialMenu.cpp
+    RadialMenuConfig.cpp
     ActionFunction.cpp
     Command.cpp
     CommandDoc.cpp
@@ -434,6 +436,8 @@ SET(Command_CPP_SRCS
 SET(Command_SRCS
     ${Command_CPP_SRCS}
     Action.h
+    RadialMenu.h
+    RadialMenuConfig.h
     ActionFunction.h
     Command.h
     CommandT.h
@@ -625,6 +629,7 @@ SET(Dialog_Settings_CPP_SRCS
     PreferencePages/DlgSettingsLightSources.cpp
     PreferencePages/DlgSettingsMacroImp.cpp
     PreferencePages/DlgSettingsNavigation.cpp
+    PreferencePages/DlgSettingsRadialMenu.cpp
     PreferencePages/DlgSettingsNotificationArea.cpp
     PreferencePages/DlgSettingsPythonConsole.cpp
     PreferencePages/DlgSettingsReportView.cpp
@@ -648,6 +653,7 @@ SET(Dialog_Settings_HPP_SRCS
     PreferencePages/DlgSettingsLightSources.h
     PreferencePages/DlgSettingsMacroImp.h
     PreferencePages/DlgSettingsNavigation.h
+    PreferencePages/DlgSettingsRadialMenu.h
     PreferencePages/DlgSettingsNotificationArea.h
     PreferencePages/DlgSettingsPythonConsole.h
     PreferencePages/DlgSettingsReportView.h

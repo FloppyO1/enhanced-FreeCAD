@@ -495,7 +495,7 @@ void ViewProviderInspection::inspectCallback(void* ud, SoEventCallback* n)
         // node
         n->getAction()->setHandled();
         n->setHandled();
-        if (mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP) {
+        if (mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP && !view->isRadialGestureActive()) {
             n->setHandled();
             // context-menu
             QMenu menu;

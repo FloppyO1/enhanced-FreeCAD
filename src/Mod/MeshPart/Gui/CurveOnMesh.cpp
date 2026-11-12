@@ -656,7 +656,7 @@ void CurveOnMeshHandler::Private::vertexCallback(void* ud, SoEventCallback* cb)
             }
         }
         else if (
-            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP
+            mbe->getButton() == SoMouseButtonEvent::BUTTON2 && mbe->getState() == SoButtonEvent::UP && !view->isRadialGestureActive()
         ) {
             CurveOnMeshHandler* self = static_cast<CurveOnMeshHandler*>(ud);
             QTimer::singleShot(100, self, &CurveOnMeshHandler::onContextMenu);
