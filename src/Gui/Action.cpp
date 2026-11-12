@@ -176,7 +176,13 @@ void Action::setVisible(bool visible)
 
 void Action::setShortcut(const QString& key)
 {
-    _action->setShortcut(key);
+    // ShortcutManager hands over shortcuts in native (translated) text, e.g. "Spazio"
+    // for Space in Italian, which the portable parser does not understand
+    QKeySequence seq = QKeySequence::fromString(key, QKeySequence::NativeText);
+    if (seq.isEmpty() && !key.isEmpty()) {
+        seq = QKeySequence::fromString(key, QKeySequence::PortableText);
+    }
+    _action->setShortcut(seq);
     setToolTip(_tooltip, _title);
 }
 
