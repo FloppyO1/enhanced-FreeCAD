@@ -42,6 +42,7 @@ namespace
 {
 
 constexpr const char* commandsKey = "Commands";
+constexpr const char* slotCountKey = "SlotCount";
 
 ParameterGrp::handle rootGroup()
 {
@@ -58,14 +59,18 @@ std::vector<std::string> splitCommands(const std::string& text)
         item.erase(item.find_last_not_of(" \t") + 1);
         result.push_back(item);
     }
-    result.resize(RadialMenuConfig::MaxSlots);
     return result;
 }
 
-std::string joinCommands(const std::vector<std::string>& cmds)
+int clampCount(int count)
+{
+    return std::clamp(count, RadialMenuConfig::MinSlots, RadialMenuConfig::MaxSlots);
+}
+
+std::string joinCommands(const std::vector<std::string>& cmds, int slotCount)
 {
     std::string text;
-    for (std::size_t i = 0; i < cmds.size() && i < std::size_t(RadialMenuConfig::MaxSlots); ++i) {
+    for (std::size_t i = 0; i < cmds.size() && i < std::size_t(slotCount); ++i) {
         if (i > 0) {
             text += ';';
         }
@@ -86,7 +91,12 @@ bool splitKey(const std::string& key, std::string& workbench, std::string& conte
 }
 
 // Reads the commands without creating parameter groups; returns false if not configured.
-bool readCommands(const std::string& workbench, const std::string& context, std::string& text)
+bool readCommands(
+    const std::string& workbench,
+    const std::string& context,
+    std::string& text,
+    int& count
+)
 {
     auto root = rootGroup();
     if (!root->HasGroup(workbench.c_str())) {
@@ -99,6 +109,7 @@ bool readCommands(const std::string& workbench, const std::string& context, std:
     auto group = wbGroup->GetGroup(context.c_str());
     const char* missing = "\x01";
     text = group->GetASCII(commandsKey, missing);
+    count = clampCount(int(group->GetInt(slotCountKey, RadialMenuConfig::DefaultSlots)));
     return text != missing;
 }
 
@@ -143,7 +154,7 @@ void collectCommands(MenuItem* item, std::vector<std::string>& out)
 {
     const auto& commandManager = Application::Instance->commandManager();
     for (MenuItem* child : item->getItems()) {
-        if (out.size() >= std::size_t(RadialMenuConfig::MaxSlots)) {
+        if (out.size() >= std::size_t(RadialMenuConfig::DefaultSlots)) {
             return;
         }
         if (child->hasItems()) {
@@ -223,12 +234,32 @@ std::vector<std::string> RadialMenuConfig::commandsFor(const std::string& contex
     std::string context;
     if (splitKey(contextKey, workbench, context)) {
         std::string text;
-        if (readCommands(workbench, context, text) || readCommands(workbench, "Any", text)
-            || readCommands("Global", context, text)) {
-            return splitCommands(text);
+        int count = RadialMenuConfig::DefaultSlots;
+        if (readCommands(workbench, context, text, count)
+            || readCommands(workbench, "Any", text, count)
+            || readCommands("Global", context, text, count)) {
+            auto result = splitCommands(text);
+            result.resize(count);
+            return result;
         }
     }
     return defaultCommandsFor(contextKey);
+}
+
+int RadialMenuConfig::slotCountFor(const std::string& contextKey)
+{
+    std::string workbench;
+    std::string context;
+    if (splitKey(contextKey, workbench, context)) {
+        std::string text;
+        int count = DefaultSlots;
+        if (readCommands(workbench, context, text, count)
+            || readCommands(workbench, "Any", text, count)
+            || readCommands("Global", context, text, count)) {
+            return count;
+        }
+    }
+    return DefaultSlots;
 }
 
 std::vector<std::string> RadialMenuConfig::defaultCommandsFor(const std::string& contextKey)
@@ -239,11 +270,15 @@ std::vector<std::string> RadialMenuConfig::defaultCommandsFor(const std::string&
     MenuItem view;
     Application::Instance->setupContextMenu("View", &view);
     collectCommands(&view, result);
-    result.resize(MaxSlots);
+    result.resize(DefaultSlots);
     return result;
 }
 
-void RadialMenuConfig::setCommandsFor(const std::string& contextKey, const std::vector<std::string>& cmds)
+void RadialMenuConfig::setCommandsFor(
+    const std::string& contextKey,
+    const std::vector<std::string>& cmds,
+    int slotCount
+)
 {
     std::string workbench;
     std::string context;
@@ -251,7 +286,9 @@ void RadialMenuConfig::setCommandsFor(const std::string& contextKey, const std::
         return;
     }
     auto group = rootGroup()->GetGroup(workbench.c_str())->GetGroup(context.c_str());
-    group->SetASCII(commandsKey, joinCommands(cmds));
+    slotCount = clampCount(slotCount);
+    group->SetASCII(commandsKey, joinCommands(cmds, slotCount));
+    group->SetInt(slotCountKey, slotCount);
 }
 
 void RadialMenuConfig::resetCommandsFor(const std::string& contextKey)
@@ -272,5 +309,6 @@ bool RadialMenuConfig::hasCommandsFor(const std::string& contextKey)
     std::string workbench;
     std::string context;
     std::string text;
-    return splitKey(contextKey, workbench, context) && readCommands(workbench, context, text);
+    int count = DefaultSlots;
+    return splitKey(contextKey, workbench, context) && readCommands(workbench, context, text, count);
 }

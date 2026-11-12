@@ -36,6 +36,7 @@
 #include "PreferencePages/DlgSettingsMacroImp.h"
 #include "PreferencePages/DlgSettingsLightSources.h"
 #include "PreferencePages/DlgSettingsNavigation.h"
+#include "PreferencePages/DlgSettingsRadialMenu.h"
 #include "PreferencePages/DlgSettingsNotificationArea.h"
 #include "PreferencePages/DlgSettingsPythonConsole.h"
 #include "PreferencePages/DlgSettingsReportView.h"
@@ -84,6 +85,7 @@ WidgetFactorySupplier::WidgetFactorySupplier()
     new PrefPageProducer<DlgSettingsLightSources>     ( QT_TRANSLATE_NOOP("QObject","Display") );
     new PrefPageProducer<DlgSettingsUI>               ( QT_TRANSLATE_NOOP("QObject","Display") );
     new PrefPageProducer<DlgSettingsNavigation>       ( QT_TRANSLATE_NOOP("QObject","Display") );
+    new PrefPageProducer<DlgSettingsRadialMenu>       ( QT_TRANSLATE_NOOP("QObject","Display") );
     new PrefPageProducer<DlgSettingsViewColor>        ( QT_TRANSLATE_NOOP("QObject","Display") );
     new PrefPageProducer<DlgSettingsAdvanced>         ( QT_TRANSLATE_NOOP("QObject","Display") );
     new PrefPageProducer<DlgSettingsWorkbenchesImp>   ( QT_TRANSLATE_NOOP("QObject","Workbenches") );

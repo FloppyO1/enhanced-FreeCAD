@@ -39,7 +39,8 @@ namespace Gui
  *  - bool "Enabled" (default true)
  *  - int "DragThreshold" in pixels (default 10)
  *  - subgroups "<Workbench>/<Context>" with a string "Commands": semicolon separated
- *    command names, an empty name is an empty slot (at most MaxSlots entries).
+ *    command names, an empty name is an empty slot, and an int "SlotCount"
+ *    (MinSlots to MaxSlots, default DefaultSlots) with the number of slots of the menu.
  *
  * A context key has the form "<Workbench>/<Context>" where Context is one of
  * Edit, Empty, Face, Edge, Vertex, Object. The groups "<Workbench>/Any" and
@@ -48,7 +49,9 @@ namespace Gui
 class GuiExport RadialMenuConfig
 {
 public:
-    static constexpr int MaxSlots = 8;
+    static constexpr int MinSlots = 4;
+    static constexpr int MaxSlots = 12;
+    static constexpr int DefaultSlots = 8;
 
     /// Parameter group path of the radial menu settings.
     static const char* groupPath();
@@ -61,15 +64,22 @@ public:
     /// Context key for the active workbench, edit mode and selection.
     static std::string contextKey();
 
-    /// Names of the commands to show for the given context key (always MaxSlots entries,
+    /// Names of the commands to show for the given context key (always slotCountFor() entries,
     /// empty strings are empty slots).
     static std::vector<std::string> commandsFor(const std::string& contextKey);
+
+    /// Number of slots of the menu for the given context key (same fallback chain as commandsFor).
+    static int slotCountFor(const std::string& contextKey);
 
     /// Built-in default derived from the classic context menu of the 3D view.
     static std::vector<std::string> defaultCommandsFor(const std::string& contextKey);
 
-    /// Store a user configuration for the given context key.
-    static void setCommandsFor(const std::string& contextKey, const std::vector<std::string>& cmds);
+    /// Store a user configuration for the given context key; cmds is truncated to slotCount.
+    static void setCommandsFor(
+        const std::string& contextKey,
+        const std::vector<std::string>& cmds,
+        int slotCount
+    );
 
     /// Remove the user configuration of the given context key.
     static void resetCommandsFor(const std::string& contextKey);

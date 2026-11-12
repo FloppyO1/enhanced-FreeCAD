@@ -2795,7 +2795,7 @@ bool NavigationStyle::handleRadialMenuEvent(const SoEvent* ev, bool& suppressPop
                     const auto items = RadialMenu::buildItems(
                         RadialMenuConfig::commandsFor(RadialMenuConfig::contextKey())
                     );
-                    runSlot(items, RadialMenu::slotAt(delta));
+                    runSlot(items, RadialMenu::slotAt(delta, int(items.size())));
                     suppressPopup = true;
                     radialBlockPopup = true;
                 }
@@ -2846,9 +2846,12 @@ bool NavigationStyle::handleRadialMenuEvent(const SoEvent* ev, bool& suppressPop
                 auto* menu = qobject_cast<RadialMenu*>(radialMenuWidget.data());
                 if (radialState == RadialState::Active && menu) {
                     menu->setCursorPos(QCursor::pos());
-                    const int slot = RadialMenu::slotAt(QCursor::pos() - radialOrigin);
                     std::vector<RadialMenu::Item> items = RadialMenu::buildItems(
                         RadialMenuConfig::commandsFor(RadialMenuConfig::contextKey())
+                    );
+                    const int slot = RadialMenu::slotAt(
+                        QCursor::pos() - radialOrigin,
+                        int(items.size())
                     );
                     runSlot(items, slot);
                 }

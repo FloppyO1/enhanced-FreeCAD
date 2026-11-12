@@ -629,6 +629,7 @@ SET(Dialog_Settings_CPP_SRCS
     PreferencePages/DlgSettingsLightSources.cpp
     PreferencePages/DlgSettingsMacroImp.cpp
     PreferencePages/DlgSettingsNavigation.cpp
+    PreferencePages/DlgSettingsRadialMenu.cpp
     PreferencePages/DlgSettingsNotificationArea.cpp
     PreferencePages/DlgSettingsPythonConsole.cpp
     PreferencePages/DlgSettingsReportView.cpp
@@ -652,6 +653,7 @@ SET(Dialog_Settings_HPP_SRCS
     PreferencePages/DlgSettingsLightSources.h
     PreferencePages/DlgSettingsMacroImp.h
     PreferencePages/DlgSettingsNavigation.h
+    PreferencePages/DlgSettingsRadialMenu.h
     PreferencePages/DlgSettingsNotificationArea.h
     PreferencePages/DlgSettingsPythonConsole.h
     PreferencePages/DlgSettingsReportView.h
