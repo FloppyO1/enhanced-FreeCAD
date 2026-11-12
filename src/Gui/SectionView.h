@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <vector>
 #include <QObject>
 #include <QPointer>
 #include <FCGlobal.h>
@@ -38,7 +39,10 @@ class QLabel;
 class QTimer;
 class QToolButton;
 class QWidget;
+class SoAction;
+class SoCallback;
 class SoClipPlane;
+class SoGLRenderAction;
 class SoCoordinate3;
 class SoEventCallback;
 class SoGroup;
@@ -123,7 +127,9 @@ private:
     void updatePlane();
     void updateOffsetSpin();
     void updateAxisWidgets();
-    void updateCap();
+    void collectTriangles();
+    void renderCap(SoGLRenderAction* action);
+    static void capCB(void* data, SoAction* action);
     void updateToggleStates();
     void setArrowHighlight(bool on);
     void createSketch();
@@ -157,10 +163,9 @@ private:
     SoScale* arrowScale {nullptr};
     SoMaterial* arrowMaterial {nullptr};
     SoCoordinate3* planeCoords {nullptr};
-    SoSwitch* capSwitch {nullptr};
-    SoCoordinate3* capCoords {nullptr};
-    SoTextureCoordinate2* capTexCoords {nullptr};
-    SoIndexedFaceSet* capFaces {nullptr};
+    SoCallback* capNode {nullptr};
+    bool showCap {true};
+    std::vector<float> capTris;  // visible faces in world coordinates
     double modelSize {10.0};
 
     // Panel
@@ -181,6 +186,7 @@ private:
 
     fastsignals::scoped_connection activateViewConnection;
     fastsignals::scoped_connection recomputedConnection;
+    fastsignals::scoped_connection changedObjectConnection;
 };
 
 }  // namespace Gui

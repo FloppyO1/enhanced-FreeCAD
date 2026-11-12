@@ -25,6 +25,7 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <numbers>
 #include <sstream>
 
@@ -32,7 +33,13 @@
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/events/SoLocation2Event.h>
 #include <Inventor/events/SoMouseButtonEvent.h>
+#include <Inventor/actions/SoCallbackAction.h>
+#include <Inventor/actions/SoGLRenderAction.h>
+#include <Inventor/SoPrimitiveVertex.h>
 #include <Inventor/nodes/SoBaseColor.h>
+#include <Inventor/nodes/SoCallback.h>
+#include <Inventor/nodes/SoShape.h>
+#include <Inventor/system/gl.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoClipPlane.h>
 #include <Inventor/nodes/SoCone.h>
@@ -51,8 +58,6 @@
 #include <Inventor/nodes/SoScale.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoSwitch.h>
-#include <Inventor/nodes/SoTexture2.h>
-#include <Inventor/nodes/SoTextureCoordinate2.h>
 #include <Inventor/nodes/SoTransform.h>
 #include <Inventor/nodes/SoTranslation.h>
 
@@ -86,6 +91,7 @@
 #include "QuantitySpinBox.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
+#include "ViewProviderDocumentObject.h"
 #include "Inventor/So3DAnnotation.h"
 
 using namespace Gui;
@@ -158,54 +164,6 @@ def classify(obj, sub):
     if n == 'SurfaceOfRevolution':
         return ('axis', _vec(srf.Location), _vec(srf.Direction), com)
     return ('point', com, (0, 0, 0), com)
-
-def _shown(gdoc, o):
-    vo = gdoc.getObject(o.Name)
-    if vo is None or not vo.Visibility:
-        return False
-    p = o.getParentGeoFeatureGroup()
-    while p is not None:
-        pv = gdoc.getObject(p.Name)
-        if pv is not None and not pv.Visibility:
-            return False
-        p = p.getParentGeoFeatureGroup()
-    return True
-
-def cap(docname, n, d, tol):
-    import FreeCADGui
-    doc = FreeCAD.getDocument(docname)
-    gdoc = FreeCADGui.getDocument(docname)
-    nv = FreeCAD.Vector(*n)
-    pts = []
-    tris = []
-    for o in doc.Objects:
-        if o.isDerivedFrom('PartDesign::Body') or o.isDerivedFrom('App::Part'):
-            continue
-        if not (o.isDerivedFrom('Part::Feature') or o.isDerivedFrom('App::Link')):
-            continue
-        if not _shown(gdoc, o):
-            continue
-        try:
-            s = Part.getShape(o, '', needSubElement=False, transform=False)
-            if s.isNull() or not s.Solids:
-                continue
-            s = s.copy()
-            s.Placement = o.getGlobalPlacement().multiply(s.Placement)
-        except Exception:
-            continue
-        for sol in s.Solids:
-            try:
-                ws = sol.slice(nv, d)
-                if not ws:
-                    continue
-                f = Part.makeFace(ws, 'Part::FaceMakerBullseye')
-                vs, ts = f.tessellate(tol)
-            except Exception:
-                continue
-            base = len(pts)
-            pts.extend(_vec(v) for v in vs)
-            tris.extend((a + base, b + base, c + base) for a, b, c in ts)
-    return (pts, tris)
 )";
 
 PyObject* sectionModule()
@@ -344,14 +302,20 @@ SectionView::SectionView(View3DInventor* view)
 
     capTimer = new QTimer(this);
     capTimer->setSingleShot(true);
-    capTimer->setInterval(120);
-    connect(capTimer, &QTimer::timeout, this, &SectionView::updateCap);
+    capTimer->setInterval(50);
+    connect(capTimer, &QTimer::timeout, this, &SectionView::collectTriangles);
 
     // clang-format off
     activateViewConnection = Application::Instance->signalActivateView.connect(
         [this](const MDIView* mdi) { onActivateView(mdi); });
     recomputedConnection = App::GetApplication().signalRecomputed.connect(
         [this](const App::Document&) {
+            if (enabled) {
+                capTimer->start();
+            }
+        });
+    changedObjectConnection = Application::Instance->signalChangedObject.connect(
+        [this](const ViewProvider&, const App::Property&) {
             if (enabled) {
                 capTimer->start();
             }
@@ -363,6 +327,7 @@ SectionView::~SectionView()
 {
     activateViewConnection.disconnect();
     recomputedConnection.disconnect();
+    changedObjectConnection.disconnect();
     detachSelection();
     if (root) {
         root->removeChild(overlay);
@@ -482,44 +447,11 @@ void SectionView::buildSceneNodes()
     events->addEventCallback(SoLocation2Event::getClassTypeId(), &SectionView::eventCB, this);
     overlay->addChild(events);
 
-    // Hatched cap on the cut area
-    capSwitch = new SoSwitch();
-    capSwitch->whichChild = SO_SWITCH_ALL;
-    auto capSep = new SoSeparator();
-    auto capPick = new SoPickStyle();
-    capPick->style = SoPickStyle::UNPICKABLE;
-    capSep->addChild(capPick);
-    auto capLight = new SoLightModel();
-    capLight->model = SoLightModel::BASE_COLOR;
-    capSep->addChild(capLight);
-    auto capColor = new SoBaseColor();
-    capColor->rgb.setValue(1.0F, 1.0F, 1.0F);
-    capSep->addChild(capColor);
-    auto texture = new SoTexture2();
-    constexpr int texSize = 32;
-    std::vector<unsigned char> image(texSize * texSize * 3);
-    for (int y = 0; y < texSize; ++y) {
-        for (int x = 0; x < texSize; ++x) {
-            bool line = ((x + y) % texSize) < 4;
-            unsigned char* px = &image[(y * texSize + x) * 3];
-            px[0] = line ? 90 : 225;
-            px[1] = line ? 60 : 215;
-            px[2] = line ? 40 : 200;
-        }
-    }
-    texture->image.setValue(SbVec2s(texSize, texSize), 3, image.data());
-    texture->model = SoTexture2::REPLACE;
-    texture->wrapS = SoTexture2::REPEAT;
-    texture->wrapT = SoTexture2::REPEAT;
-    capSep->addChild(texture);
-    capTexCoords = new SoTextureCoordinate2();
-    capSep->addChild(capTexCoords);
-    capCoords = new SoCoordinate3();
-    capSep->addChild(capCoords);
-    capFaces = new SoIndexedFaceSet();
-    capSep->addChild(capFaces);
-    capSwitch->addChild(capSep);
-    overlay->addChild(capSwitch);
+    // Hatched cap on the cut area, drawn with the stencil buffer
+    overlay->renderCaching = SoSeparator::OFF;
+    capNode = new SoCallback();
+    capNode->setCallback(&SectionView::capCB, this);
+    overlay->addChild(capNode);
 
     arrowSwitch = new SoSwitch();
     arrowSwitch->whichChild = SO_SWITCH_ALL;
@@ -748,9 +680,12 @@ void SectionView::buildPanel()
         arrowSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
     });
     connect(capBox, &QCheckBox::toggled, this, [this](bool on) {
-        capSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+        showCap = on;
         if (on) {
-            updateCap();
+            collectTriangles();
+        }
+        if (view) {
+            view->getViewer()->redraw();
         }
     });
     connect(sketchButton, &QPushButton::clicked, this, &SectionView::createSketch);
@@ -786,6 +721,7 @@ void SectionView::setEnabled(bool on)
                 updateArrowSize();
                 updatePlane();
             }
+            collectTriangles();
             dock->show();
             dock->raise();
         }
@@ -1159,10 +1095,6 @@ void SectionView::updatePlane()
 
     arrowXform->translation.setValue(toSb(planePoint()));
     arrowXform->rotation.setValue(SbRotation(SbVec3f(0, 1, 0), toSb(st.normal)));
-
-    if (enabled) {
-        capTimer->start();
-    }
 }
 
 void SectionView::updateOffsetSpin()
@@ -1172,74 +1104,213 @@ void SectionView::updateOffsetSpin()
     offsetSpin->blockSignals(false);
 }
 
-void SectionView::updateCap()
+namespace
 {
-    if (!enabled || !view || capSwitch->whichChild.getValue() == SO_SWITCH_NONE) {
-        return;
-    }
-    App::Document* doc = view->getGuiDocument() ? view->getGuiDocument()->getDocument() : nullptr;
-    if (!doc) {
-        return;
-    }
-    Base::Vector3d n = clipNormal();
-    double d = n * planePoint();
+struct TriangleCollector
+{
+    std::vector<float>* tris;
+    SoNode* exclude;
+    View3DInventorViewer* viewer;
+    std::map<ViewProvider*, bool> solidCache;
+    bool accept {false};
+};
 
-    std::vector<SbVec3f> pts;
-    std::vector<int32_t> index;
-    {
-        Base::PyGILStateLocker lock;
-        try {
-            Py::Dict module(sectionModule());
-            Py::Callable fn(module.getItem("cap"));
-            Py::Tuple args(4);
-            args.setItem(0, Py::String(doc->getName()));
-            Py::Tuple nt(3);
-            nt.setItem(0, Py::Float(n.x));
-            nt.setItem(1, Py::Float(n.y));
-            nt.setItem(2, Py::Float(n.z));
-            args.setItem(1, nt);
-            args.setItem(2, Py::Float(d));
-            args.setItem(3, Py::Float(modelSize / 400.0));
-            Py::Tuple result(fn.apply(args));
-            Py::List plist(result[0]);
-            Py::List tlist(result[1]);
-            pts.reserve(plist.size());
-            for (const auto& p : plist) {
-                pts.push_back(toSb(toVector(p)));
-            }
-            index.reserve(tlist.size() * 4);
-            for (const auto& t : tlist) {
-                Py::Sequence tri(t);
-                for (int i = 0; i < 3; ++i) {
-                    index.push_back(static_cast<int32_t>(static_cast<long>(Py::Long(tri[i]))));
+// Only objects with solids give a meaningful cap: sheets and sketch faces
+// would fill their whole projection.
+bool hasSolids(ViewProvider* vp)
+{
+    auto vpd = freecad_cast<ViewProviderDocumentObject*>(vp);
+    if (!vpd || !vpd->getObject()) {
+        return false;
+    }
+    Base::PyGILStateLocker lock;
+    try {
+        Py::Object obj(vpd->getObject()->getPyObject(), true);
+        if (!obj.hasAttr("Shape")) {
+            return false;
+        }
+        Py::Object shape = obj.getAttr("Shape");
+        Py::Sequence solids(shape.getAttr("Solids"));
+        return solids.size() > 0;
+    }
+    catch (Py::Exception&) {
+        PyErr_Clear();
+        return false;
+    }
+}
+
+SoCallbackAction::Response preSeparatorCB(void* data, SoCallbackAction*, const SoNode* node)
+{
+    auto collector = static_cast<TriangleCollector*>(data);
+    return node == collector->exclude ? SoCallbackAction::PRUNE : SoCallbackAction::CONTINUE;
+}
+
+SoCallbackAction::Response preShapeCB(void* data, SoCallbackAction* action, const SoNode* node)
+{
+    // only the faces of shapes (closed solids give correct caps); datum planes,
+    // markers and other helpers are ignored
+    static const SoType brepType = SoType::fromName("SoBrepFaceSet");
+    auto collector = static_cast<TriangleCollector*>(data);
+    collector->accept = !brepType.isBad() && node->getTypeId().isDerivedFrom(brepType);
+    if (collector->accept) {
+        auto path = const_cast<SoPath*>(action->getCurPath());
+        ViewProvider* vp = collector->viewer->getViewProviderByPathFromTail(path);
+        auto it = collector->solidCache.find(vp);
+        if (it == collector->solidCache.end()) {
+            it = collector->solidCache.emplace(vp, hasSolids(vp)).first;
+        }
+        collector->accept = it->second;
+    }
+    return SoCallbackAction::CONTINUE;
+}
+
+void triangleCB(
+    void* data,
+    SoCallbackAction* action,
+    const SoPrimitiveVertex* v1,
+    const SoPrimitiveVertex* v2,
+    const SoPrimitiveVertex* v3
+)
+{
+    auto collector = static_cast<TriangleCollector*>(data);
+    if (!collector->accept) {
+        return;
+    }
+    const SbMatrix& matrix = action->getModelMatrix();
+    for (const SoPrimitiveVertex* v : {v1, v2, v3}) {
+        SbVec3f p;
+        matrix.multVecMatrix(v->getPoint(), p);
+        collector->tris->push_back(p[0]);
+        collector->tris->push_back(p[1]);
+        collector->tris->push_back(p[2]);
+    }
+}
+
+// 45 degree hatch lines, 8 pixels apart
+const GLubyte* hatchStipple()
+{
+    static GLubyte pattern[128] = {};
+    static bool init = false;
+    if (!init) {
+        for (int y = 0; y < 32; ++y) {
+            for (int x = 0; x < 32; ++x) {
+                if (((x + y) % 8) == 0) {
+                    pattern[y * 4 + x / 8] |= static_cast<GLubyte>(0x80 >> (x % 8));
                 }
-                index.push_back(-1);
             }
         }
-        catch (Py::Exception&) {
-            Base::PyException e;
-            e.reportException();
-            return;
-        }
+        init = true;
+    }
+    return pattern;
+}
+}  // namespace
+
+void SectionView::collectTriangles()
+{
+    capTris.clear();
+    if (!enabled || !view || !showCap) {
+        return;
+    }
+    View3DInventorViewer* viewer = view->getViewer();
+    TriangleCollector collector {&capTris, overlay, viewer, {}};
+    SoCallbackAction action(viewer->getSoRenderManager()->getViewportRegion());
+    action.addPreCallback(SoSeparator::getClassTypeId(), preSeparatorCB, &collector);
+    action.addPreCallback(SoShape::getClassTypeId(), preShapeCB, &collector);
+    action.addTriangleCallback(SoShape::getClassTypeId(), triangleCB, &collector);
+    action.apply(viewer->getSceneGraph());
+    viewer->redraw();
+}
+
+void SectionView::capCB(void* data, SoAction* action)
+{
+    if (action->isOfType(SoGLRenderAction::getClassTypeId())) {
+        static_cast<SectionView*>(data)->renderCap(static_cast<SoGLRenderAction*>(action));
+    }
+}
+
+void SectionView::renderCap(SoGLRenderAction* action)
+{
+    Q_UNUSED(action);
+    if (!enabled || !showCap || capTris.empty()) {
+        return;
+    }
+    GLint stencilBits = 0;
+    glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
+    if (stencilBits < 1) {
+        return;
     }
 
-    // hatch coordinates in the plane
+    Base::Vector3d n = clipNormal();
+    Base::Vector3d p = planePoint();
+    double d = n * p;
+
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+
+    glDisable(GL_LIGHTING);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    // 1. parity of the clipped geometry along each view ray: odd inside a solid
+    GLdouble equation[4] = {n.x, n.y, n.z, -d};
+    glClipPlane(GL_CLIP_PLANE0, equation);
+    glEnable(GL_CLIP_PLANE0);
+    glEnable(GL_STENCIL_TEST);
+    glStencilMask(0x01);
+    glClearStencil(0);
+    glClear(GL_STENCIL_BUFFER_BIT);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glStencilFunc(GL_ALWAYS, 0, 0x01);
+    glStencilOp(GL_KEEP, GL_INVERT, GL_INVERT);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(3, GL_FLOAT, 0, capTris.data());
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(capTris.size() / 3));
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisable(GL_CLIP_PLANE0);
+
+    // 2. a large quad on the plane where the parity is odd
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glStencilFunc(GL_EQUAL, 1, 0x01);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
     Base::Vector3d u = perpendicular(n);
     Base::Vector3d v = n % u;
-    double spacing = modelSize / 60.0;
-    std::vector<SbVec2f> tex;
-    tex.reserve(pts.size());
-    for (const auto& p : pts) {
-        Base::Vector3d bp = toBase(p);
-        tex.emplace_back(static_cast<float>(bp * u / spacing), static_cast<float>(bp * v / spacing));
-    }
+    double h = modelSize * 2.0;
+    const Base::Vector3d corners[4] = {
+        p - u * h - v * h,
+        p + u * h - v * h,
+        p + u * h + v * h,
+        p - u * h + v * h
+    };
+    auto drawQuad = [&]() {
+        glBegin(GL_QUADS);
+        for (const auto& c : corners) {
+            glVertex3d(c.x, c.y, c.z);
+        }
+        glEnd();
+    };
+    glColor3f(0.88F, 0.86F, 0.82F);
+    drawQuad();
+    glEnable(GL_POLYGON_STIPPLE);
+    glPolygonStipple(hatchStipple());
+    glDepthMask(GL_FALSE);
+    glColor3f(0.35F, 0.22F, 0.12F);
+    drawQuad();
+    glDisable(GL_POLYGON_STIPPLE);
 
-    capCoords->point.setNum(static_cast<int>(pts.size()));
-    capCoords->point.setValues(0, static_cast<int>(pts.size()), pts.data());
-    capTexCoords->point.setNum(static_cast<int>(tex.size()));
-    capTexCoords->point.setValues(0, static_cast<int>(tex.size()), tex.data());
-    capFaces->coordIndex.setNum(static_cast<int>(index.size()));
-    capFaces->coordIndex.setValues(0, static_cast<int>(index.size()), index.data());
+    glStencilMask(0xFF);
+    glClear(GL_STENCIL_BUFFER_BIT);
+
+    glPopClientAttrib();
+    glPopAttrib();
 }
 
 void SectionView::setArrowHighlight(bool on)
@@ -1299,8 +1370,6 @@ void SectionView::eventCB(void* data, SoEventCallback* cb)
         if (self->dragging) {
             self->dragging = false;
             self->setArrowHighlight(hitArrow());
-            self->capTimer->stop();
-            self->updateCap();
             cb->setHandled();
         }
     }
