@@ -23,8 +23,10 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <FCGlobal.h>
@@ -33,7 +35,10 @@
 #include "Selection/Selection.h"
 
 class QDockWidget;
-class QButtonGroup;
+class QEvent;
+class QKeyEvent;
+class QVBoxLayout;
+class QPushButton;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -44,6 +49,7 @@ class QDoubleSpinBox;
 class QSpinBox;
 class QGroupBox;
 class SoAction;
+class SoEvent;
 class SoCallback;
 class SoClipPlane;
 class SoGLRenderAction;
@@ -66,8 +72,10 @@ class ColorButton;
 
 /**
  * Quick section view of a 3D view: a single clipping plane that can be toggled
- * on and off, chosen from base planes, the view, or picked references, and moved
- * with an arrow or a numeric offset. The cut area is shown as a hatched cap.
+ * on and off. While the section is being edited the plane follows the current
+ * selection (faces, edges, vertices, origin or datum planes) and can be moved
+ * with an arrow or a numeric offset. The cut area is shown as a hatched cap,
+ * which can be clicked after the section is confirmed to start a sketch on it.
  * One instance lives as a child of each 3D view, so the last plane is kept
  * while the section is turned off.
  */
@@ -78,9 +86,6 @@ class GuiExport SectionView: public QObject, public SelectionObserver
 public:
     enum class Source
     {
-        XY,
-        XZ,
-        YZ,
         View,
         Selection
     };
@@ -109,11 +114,12 @@ public:
     /// Shows the panel again to edit a confirmed section.
     void editAgain();
 
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     struct PlaneState
     {
-        Source source {Source::XY};
+        Source source {Source::View};
         Base::Vector3d basePoint;
         Base::Vector3d normal {0, 0, 1};
         double offset {0.0};
@@ -128,12 +134,28 @@ private:
 
     void onSelectionChanged(const SelectionChanges& msg) override;
 
+    struct RefItem
+    {
+        QString text;
+        std::string doc;
+        std::string obj;
+        std::string sub;
+    };
+
     void buildPanel();
     void buildSceneNodes();
-    void setSource(Source src);
-    void startPicking();
-    void finishPicking(bool accept);
+    void setDefaultPlane();
+    void updateFromSelection(bool resetIfEmpty);
+    void rebuildReferenceList();
+    void removeReference(const RefItem& item);
+    void clearReferences();
     bool planeFromSelection();
+    bool handleKey(QKeyEvent* event, bool shortcutOverride);
+    bool editingBlocked() const;
+    bool capAt(const SoEvent* ev) const;
+    void handleCapEvent(SoEventCallback* cb);
+    void setCapSelected(bool on);
+    void updateSketchButton();
     void applyState();
     void updateStepFromModel();
     void updateArrowSize();
@@ -158,12 +180,13 @@ private:
 private:
     QPointer<View3DInventor> view;
     bool enabled {false};
-    bool initialized {false};
     bool reversed {false};
     PlaneState st;
-    PlaneState savedState;
-    bool picking {false};
     bool confirmed {false};
+    bool capSelected {false};
+    bool capPressed {false};
+    QElapsedTimer capClickTimer;
+    std::vector<RefItem> refItems;
 
     // Cap appearance
     struct CapStyle
@@ -201,10 +224,11 @@ private:
 
     // Panel
     QPointer<QDockWidget> dock;
-    QButtonGroup* sourceGroup {nullptr};
     QCheckBox* reverseBox {nullptr};
-    QWidget* pickWidget {nullptr};
-    QLabel* pickLabel {nullptr};
+    QWidget* refsContainer {nullptr};
+    QVBoxLayout* refsLayout {nullptr};
+    QLabel* refsHint {nullptr};
+    QPointer<QPushButton> sketchOverlay;
     QWidget* axisWidget {nullptr};
     QComboBox* axisMode {nullptr};
     QLabel* axisLabel {nullptr};
