@@ -768,6 +768,12 @@ Action* StdCmdSectionView::createAction()
 void StdCmdSectionView::activated(int iMsg)
 {
     auto view = qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
+    auto section = SectionView::of(view, false);
+    if (section && section->isEnabled() && section->isConfirmed()) {
+        // reopen the panel of a confirmed section instead of turning it off
+        section->editAgain();
+        return;
+    }
     SectionView::toggle(view, iMsg != 0);
 }
 

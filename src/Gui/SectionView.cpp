@@ -65,11 +65,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSignalBlocker>
+#include <QSpinBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QToolButton>
@@ -89,6 +92,7 @@
 #include "Document.h"
 #include "MainWindow.h"
 #include "QuantitySpinBox.h"
+#include "Widgets.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
 #include "ViewProviderDocumentObject.h"
@@ -299,6 +303,7 @@ SectionView::SectionView(View3DInventor* view)
     setObjectName(QStringLiteral("SectionView"));
     buildSceneNodes();
     buildPanel();
+    loadAppearance();
 
     capTimer = new QTimer(this);
     capTimer->setSingleShot(true);
@@ -416,9 +421,11 @@ void SectionView::installOverlayButton(View3DInventor* view)
     button->setCursor(Qt::ArrowCursor);
     button->setStyleSheet(
         QStringLiteral(
-            "QToolButton { background: rgba(255, 255, 255, 140); border: 1px solid "
-            "rgba(0, 0, 0, 60); border-radius: 4px; padding: 2px; }"
-            "QToolButton:checked { background: rgba(255, 170, 80, 200); }"
+            "QToolButton { background: transparent; border: 1px solid transparent; "
+            "border-radius: 4px; padding: 2px; }"
+            "QToolButton:hover { border: 1px solid rgba(128, 128, 128, 160); }"
+            "QToolButton:checked { background: transparent; border: 2px solid "
+            "rgba(255, 140, 40, 230); padding: 1px; }"
         )
     );
     new OverlayPlacer(host, button);
@@ -637,11 +644,62 @@ void SectionView::buildPanel()
     infoLabel->setWordWrap(true);
     layout->addWidget(infoLabel);
 
+    appearanceBox = new QGroupBox(tr("Appearance"), panel);
+    appearanceBox->setCheckable(true);
+    appearanceBox->setChecked(false);
+    appearanceBox->setToolTip(tr("Appearance of the cut faces"));
+    auto appLayout = new QGridLayout(appearanceBox);
+    fillButton = new ColorButton(appearanceBox);
+    fillButton->setToolTip(tr("Fill color of the cut faces"));
+    appLayout->addWidget(new QLabel(tr("Fill color"), appearanceBox), 0, 0);
+    appLayout->addWidget(fillButton, 0, 1);
+    transparencySpin = new QSpinBox(appearanceBox);
+    transparencySpin->setRange(0, 100);
+    transparencySpin->setSuffix(QStringLiteral(" %"));
+    transparencySpin->setToolTip(tr("Transparency of the fill"));
+    appLayout->addWidget(new QLabel(tr("Fill transparency"), appearanceBox), 1, 0);
+    appLayout->addWidget(transparencySpin, 1, 1);
+    hatchCombo = new QComboBox(appearanceBox);
+    hatchCombo->addItem(tr("None"));
+    hatchCombo->addItem(tr("Single lines"));
+    hatchCombo->addItem(tr("Cross-hatch"));
+    appLayout->addWidget(new QLabel(tr("Hatch"), appearanceBox), 2, 0);
+    appLayout->addWidget(hatchCombo, 2, 1);
+    hatchAngleSpin = new QDoubleSpinBox(appearanceBox);
+    hatchAngleSpin->setRange(0.0, 180.0);
+    hatchAngleSpin->setDecimals(0);
+    hatchAngleSpin->setSuffix(QStringLiteral(" \u00B0"));
+    appLayout->addWidget(new QLabel(tr("Hatch angle"), appearanceBox), 3, 0);
+    appLayout->addWidget(hatchAngleSpin, 3, 1);
+    spacingSpin = new QDoubleSpinBox(appearanceBox);
+    spacingSpin->setRange(2.0, 200.0);
+    spacingSpin->setDecimals(0);
+    spacingSpin->setSuffix(QStringLiteral(" px"));
+    appLayout->addWidget(new QLabel(tr("Spacing"), appearanceBox), 4, 0);
+    appLayout->addWidget(spacingSpin, 4, 1);
+    lineWidthSpin = new QDoubleSpinBox(appearanceBox);
+    lineWidthSpin->setRange(0.5, 10.0);
+    lineWidthSpin->setDecimals(1);
+    lineWidthSpin->setSingleStep(0.5);
+    lineWidthSpin->setSuffix(QStringLiteral(" px"));
+    appLayout->addWidget(new QLabel(tr("Line width"), appearanceBox), 5, 0);
+    appLayout->addWidget(lineWidthSpin, 5, 1);
+    lineButton = new ColorButton(appearanceBox);
+    lineButton->setToolTip(tr("Color of the hatch lines"));
+    appLayout->addWidget(new QLabel(tr("Line color"), appearanceBox), 6, 0);
+    appLayout->addWidget(lineButton, 6, 1);
+    layout->addWidget(appearanceBox);
+
     auto sketchButton = new QPushButton(tr("Create Sketch on Plane"), panel);
     sketchButton->setToolTip(
         tr("Create a sketch on the current section plane, in the active body if there is one")
     );
     layout->addWidget(sketchButton);
+    auto confirmButton = new QPushButton(tr("Confirm"), panel);
+    confirmButton->setToolTip(
+        tr("Lock the section: hide the panel, the arrow and the plane and keep only the cut model")
+    );
+    layout->addWidget(confirmButton);
     auto closeButton = new QPushButton(tr("Turn Off Section"), panel);
     layout->addWidget(closeButton);
     layout->addStretch();
@@ -676,9 +734,30 @@ void SectionView::buildPanel()
         st.offset = value;
         updatePlane();
     });
-    connect(arrowBox, &QCheckBox::toggled, this, [this](bool on) {
-        arrowSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    connect(arrowBox, &QCheckBox::toggled, this, [this](bool) { updateArrowVisibility(); });
+    connect(appearanceBox, &QGroupBox::toggled, this, [this](bool on) {
+        const auto children = appearanceBox->findChildren<QWidget*>(
+            QString(),
+            Qt::FindDirectChildrenOnly
+        );
+        for (auto child : children) {
+            child->setVisible(on);
+        }
     });
+    connect(fillButton, &ColorButton::changed, this, [this]() { appearanceChanged(); });
+    connect(lineButton, &ColorButton::changed, this, [this]() { appearanceChanged(); });
+    connect(transparencySpin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        appearanceChanged();
+    });
+    connect(hatchCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        appearanceChanged();
+    });
+    for (auto spin : {hatchAngleSpin, spacingSpin, lineWidthSpin}) {
+        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+            appearanceChanged();
+        });
+    }
+    connect(confirmButton, &QPushButton::clicked, this, &SectionView::confirm);
     connect(capBox, &QCheckBox::toggled, this, [this](bool on) {
         showCap = on;
         if (on) {
@@ -695,7 +774,131 @@ void SectionView::buildPanel()
     // clang-format on
 
     pickWidget->hide();
+    const auto appChildren = appearanceBox->findChildren<QWidget*>(
+        QString(),
+        Qt::FindDirectChildrenOnly
+    );
+    for (auto child : appChildren) {
+        child->hide();
+    }
     updateAxisWidgets();
+}
+
+namespace
+{
+ParameterGrp::handle sectionParams()
+{
+    return App::GetApplication().GetParameterGroupByPath(
+        "User parameter:BaseApp/Preferences/View/SectionView"
+    );
+}
+}  // namespace
+
+void SectionView::loadAppearance()
+{
+    auto grp = sectionParams();
+    CapStyle d;
+    auto color = [&](const char* name, const QColor& def) {
+        unsigned long packed = grp->GetUnsigned(name, def.rgb() & 0xFFFFFF);
+        return QColor(
+            static_cast<int>((packed >> 16) & 0xFF),
+            static_cast<int>((packed >> 8) & 0xFF),
+            static_cast<int>(packed & 0xFF)
+        );
+    };
+    capStyle.fill = color("CapFillColor", d.fill);
+    capStyle.line = color("CapLineColor", d.line);
+    capStyle.transparency = std::clamp<int>(grp->GetInt("CapTransparency", d.transparency), 0, 100);
+    capStyle.hatch = std::clamp<int>(grp->GetInt("CapHatchStyle", d.hatch), 0, 2);
+    capStyle.angle = std::clamp(grp->GetFloat("CapHatchAngle", d.angle), 0.0, 180.0);
+    capStyle.spacing = std::clamp(grp->GetFloat("CapHatchSpacing", d.spacing), 2.0, 200.0);
+    capStyle.lineWidth = std::clamp(grp->GetFloat("CapLineWidth", d.lineWidth), 0.5, 10.0);
+
+    const QSignalBlocker b1(fillButton);
+    const QSignalBlocker b2(lineButton);
+    const QSignalBlocker b3(transparencySpin);
+    const QSignalBlocker b4(hatchCombo);
+    const QSignalBlocker b5(hatchAngleSpin);
+    const QSignalBlocker b6(spacingSpin);
+    const QSignalBlocker b7(lineWidthSpin);
+    fillButton->setColor(capStyle.fill);
+    lineButton->setColor(capStyle.line);
+    transparencySpin->setValue(capStyle.transparency);
+    hatchCombo->setCurrentIndex(capStyle.hatch);
+    hatchAngleSpin->setValue(capStyle.angle);
+    spacingSpin->setValue(capStyle.spacing);
+    lineWidthSpin->setValue(capStyle.lineWidth);
+}
+
+void SectionView::saveAppearance()
+{
+    auto grp = sectionParams();
+    auto pack = [](const QColor& c) {
+        return static_cast<unsigned long>((c.red() << 16) | (c.green() << 8) | c.blue());
+    };
+    grp->SetUnsigned("CapFillColor", pack(capStyle.fill));
+    grp->SetUnsigned("CapLineColor", pack(capStyle.line));
+    grp->SetInt("CapTransparency", capStyle.transparency);
+    grp->SetInt("CapHatchStyle", capStyle.hatch);
+    grp->SetFloat("CapHatchAngle", capStyle.angle);
+    grp->SetFloat("CapHatchSpacing", capStyle.spacing);
+    grp->SetFloat("CapLineWidth", capStyle.lineWidth);
+}
+
+void SectionView::appearanceChanged()
+{
+    capStyle.fill = fillButton->color();
+    capStyle.line = lineButton->color();
+    capStyle.transparency = transparencySpin->value();
+    capStyle.hatch = hatchCombo->currentIndex();
+    capStyle.angle = hatchAngleSpin->value();
+    capStyle.spacing = spacingSpin->value();
+    capStyle.lineWidth = lineWidthSpin->value();
+    saveAppearance();
+    if (view) {
+        view->getViewer()->redraw();
+    }
+}
+
+void SectionView::updateArrowVisibility()
+{
+    bool show = arrowBox->isChecked() && !confirmed;
+    arrowSwitch->whichChild = show ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    dragging = dragging && show;
+}
+
+void SectionView::confirm()
+{
+    if (!enabled) {
+        return;
+    }
+    if (picking) {
+        finishPicking(true);
+    }
+    confirmed = true;
+    dragging = false;
+    setArrowHighlight(false);
+    updateArrowVisibility();
+    dock->hide();
+    if (view) {
+        view->getViewer()->redraw();
+    }
+    updateToggleStates();
+}
+
+void SectionView::editAgain()
+{
+    if (!enabled) {
+        return;
+    }
+    confirmed = false;
+    updateArrowVisibility();
+    dock->show();
+    dock->raise();
+    if (view) {
+        view->getViewer()->redraw();
+    }
+    updateToggleStates();
 }
 
 void SectionView::setEnabled(bool on)
@@ -721,6 +924,8 @@ void SectionView::setEnabled(bool on)
                 updateArrowSize();
                 updatePlane();
             }
+            confirmed = false;
+            updateArrowVisibility();
             collectTriangles();
             dock->show();
             dock->raise();
@@ -736,6 +941,7 @@ void SectionView::setEnabled(bool on)
             root->unref();
             root = nullptr;
             enabled = false;
+            confirmed = false;
             dock->hide();
         }
     }
@@ -765,7 +971,7 @@ void SectionView::onActivateView(const QWidget* activated)
     if (!enabled || !dock) {
         return;
     }
-    dock->setVisible(activated == view);
+    dock->setVisible(activated == view && !confirmed);
 }
 
 void SectionView::setSource(Source src)
@@ -1186,23 +1392,6 @@ void triangleCB(
     }
 }
 
-// 45 degree hatch lines, 8 pixels apart
-const GLubyte* hatchStipple()
-{
-    static GLubyte pattern[128] = {};
-    static bool init = false;
-    if (!init) {
-        for (int y = 0; y < 32; ++y) {
-            for (int x = 0; x < 32; ++x) {
-                if (((x + y) % 8) == 0) {
-                    pattern[y * 4 + x / 8] |= static_cast<GLubyte>(0x80 >> (x % 8));
-                }
-            }
-        }
-        init = true;
-    }
-    return pattern;
-}
 }  // namespace
 
 void SectionView::collectTriangles()
@@ -1278,8 +1467,11 @@ void SectionView::renderCap(SoGLRenderAction* action)
     glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
+    // where the plane quad passes the depth test the stencil goes from 1 to 2,
+    // so the hatch lines can be limited to the visible part of the cap
+    glStencilMask(0xFF);
     glStencilFunc(GL_EQUAL, 1, 0x01);
-    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 
     Base::Vector3d u = perpendicular(n);
     Base::Vector3d v = n % u;
@@ -1297,14 +1489,82 @@ void SectionView::renderCap(SoGLRenderAction* action)
         }
         glEnd();
     };
-    glColor3f(0.88F, 0.86F, 0.82F);
+    const CapStyle& cs = capStyle;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(
+        static_cast<float>(cs.fill.redF()),
+        static_cast<float>(cs.fill.greenF()),
+        static_cast<float>(cs.fill.blueF()),
+        1.0F - static_cast<float>(cs.transparency) / 100.0F
+    );
     drawQuad();
-    glEnable(GL_POLYGON_STIPPLE);
-    glPolygonStipple(hatchStipple());
-    glDepthMask(GL_FALSE);
-    glColor3f(0.35F, 0.22F, 0.12F);
-    drawQuad();
-    glDisable(GL_POLYGON_STIPPLE);
+
+    // 3. hatch lines in screen space, only where the cap is visible (stencil == 2)
+    if (cs.hatch > 0) {
+        GLint vp[4];
+        glGetIntegerv(GL_VIEWPORT, vp);
+        double dpr = view ? view->devicePixelRatioF() : 1.0;
+        double spacing = std::max(2.0, cs.spacing * dpr);
+        double w = vp[2];
+        double hgt = vp[3];
+        double diag = std::sqrt(w * w + hgt * hgt);
+
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0.0, w, 0.0, hgt, -1.0, 1.0);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glStencilMask(0x00);
+        glStencilFunc(GL_EQUAL, 2, 0xFF);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        glLineWidth(static_cast<float>(cs.lineWidth * dpr));
+        glColor4f(
+            static_cast<float>(cs.line.redF()),
+            static_cast<float>(cs.line.greenF()),
+            static_cast<float>(cs.line.blueF()),
+            1.0F
+        );
+        auto drawFamily = [&](double degrees) {
+            double a = Base::toRadians(degrees);
+            double dx = std::cos(a);
+            double dy = std::sin(a);
+            double mx = -dy;
+            double my = dx;
+            // range of the perpendicular offset over the viewport corners
+            double lo = std::min({0.0, mx * w, my * hgt, mx * w + my * hgt});
+            double hi = std::max({0.0, mx * w, my * hgt, mx * w + my * hgt});
+            double start = std::ceil(lo / spacing) * spacing;
+            long count = static_cast<long>((hi - start) / spacing) + 1;
+            if (count > 20000) {
+                return;
+            }
+            glBegin(GL_LINES);
+            for (long i = 0; i < count; ++i) {
+                double t = start + static_cast<double>(i) * spacing;
+                double cx = mx * t;
+                double cy = my * t;
+                glVertex2d(cx - dx * diag, cy - dy * diag);
+                glVertex2d(cx + dx * diag, cy + dy * diag);
+            }
+            glEnd();
+        };
+        drawFamily(cs.angle);
+        if (cs.hatch == 2) {
+            drawFamily(cs.angle + 90.0);
+        }
+
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+    }
 
     glStencilMask(0xFF);
     glClear(GL_STENCIL_BUFFER_BIT);

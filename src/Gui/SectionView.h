@@ -24,6 +24,7 @@
 #pragma once
 
 #include <vector>
+#include <QColor>
 #include <QObject>
 #include <QPointer>
 #include <FCGlobal.h>
@@ -39,6 +40,9 @@ class QLabel;
 class QTimer;
 class QToolButton;
 class QWidget;
+class QDoubleSpinBox;
+class QSpinBox;
+class QGroupBox;
 class SoAction;
 class SoCallback;
 class SoClipPlane;
@@ -58,6 +62,7 @@ namespace Gui
 {
 class View3DInventor;
 class QuantitySpinBox;
+class ColorButton;
 
 /**
  * Quick section view of a 3D view: a single clipping plane that can be toggled
@@ -95,6 +100,14 @@ public:
         return enabled;
     }
     void setEnabled(bool on);
+    bool isConfirmed() const
+    {
+        return confirmed;
+    }
+    /// Locks the section: panel, arrow and plane square are hidden.
+    void confirm();
+    /// Shows the panel again to edit a confirmed section.
+    void editAgain();
 
 
 private:
@@ -131,6 +144,10 @@ private:
     void renderCap(SoGLRenderAction* action);
     static void capCB(void* data, SoAction* action);
     void updateToggleStates();
+    void updateArrowVisibility();
+    void loadAppearance();
+    void saveAppearance();
+    void appearanceChanged();
     void setArrowHighlight(bool on);
     void createSketch();
     Base::Vector3d planePoint() const;
@@ -146,6 +163,20 @@ private:
     PlaneState st;
     PlaneState savedState;
     bool picking {false};
+    bool confirmed {false};
+
+    // Cap appearance
+    struct CapStyle
+    {
+        QColor fill {224, 219, 209};
+        int transparency {0};  // percent
+        int hatch {1};         // 0 none, 1 single lines, 2 cross-hatch
+        double angle {45.0};   // degrees
+        double spacing {8.0};  // pixels
+        double lineWidth {1.0};
+        QColor line {89, 56, 31};
+    };
+    CapStyle capStyle;
 
     // dragging
     bool dragging {false};
@@ -182,6 +213,14 @@ private:
     QCheckBox* arrowBox {nullptr};
     QCheckBox* capBox {nullptr};
     QLabel* infoLabel {nullptr};
+    QGroupBox* appearanceBox {nullptr};
+    ColorButton* fillButton {nullptr};
+    QSpinBox* transparencySpin {nullptr};
+    QComboBox* hatchCombo {nullptr};
+    QDoubleSpinBox* hatchAngleSpin {nullptr};
+    QDoubleSpinBox* spacingSpin {nullptr};
+    QDoubleSpinBox* lineWidthSpin {nullptr};
+    ColorButton* lineButton {nullptr};
     QTimer* capTimer {nullptr};
 
     fastsignals::scoped_connection activateViewConnection;
