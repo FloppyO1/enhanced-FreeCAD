@@ -32,6 +32,7 @@
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 #include <Inventor/SoPickedPoint.h>
 #include <QApplication>
+#include <QCursor>
 #include <QDialog>
 #include <QDockWidget>
 #include <QDomDocument>
@@ -820,6 +821,12 @@ void StdCmdViewOrientationCube::activated(int iMsg)
     // outside the 3D views, e.g. in the tree view
     QWidget* focus = QApplication::focusWidget();
     View3DInventor* focusView = nullptr;
+    // the 3D view under the mouse wins: the view rarely has the keyboard focus
+    // while working with the mouse
+    for (QWidget* w = QApplication::widgetAt(QCursor::pos()); w && !focusView;
+         w = w->parentWidget()) {
+        focusView = qobject_cast<View3DInventor*>(w);
+    }
     for (QWidget* w = focus; w && !focusView; w = w->parentWidget()) {
         focusView = qobject_cast<View3DInventor*>(w);
     }

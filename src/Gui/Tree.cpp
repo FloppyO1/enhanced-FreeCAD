@@ -1896,6 +1896,13 @@ bool TreeWidget::event(QEvent* e)
     if (e->type() == QEvent::ShortcutOverride) {
         auto ke = static_cast<QKeyEvent*>(e);
         if (ke->key() == Qt::Key_Space && ke->modifiers() == Qt::NoModifier) {
+            // With the mouse over a 3D view, leave Space to the global shortcut
+            // (orientation cube) instead of the tree
+            for (QWidget* w = QApplication::widgetAt(QCursor::pos()); w; w = w->parentWidget()) {
+                if (qobject_cast<View3DInventor*>(w)) {
+                    return QTreeWidget::event(e);
+                }
+            }
             // Claim the Space key so Qt does not fire the global
             // Std_ToggleVisibility
             ke->accept();

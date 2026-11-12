@@ -45,6 +45,7 @@
 #include <Inventor/nodes/SoTransform.h>
 
 #include <QApplication>
+#include <QCursor>
 #include <QFont>
 #include <QFontMetrics>
 #include <QImage>
@@ -602,8 +603,10 @@ bool ViewOrientationCube::eventFilter(QObject* watched, QEvent* event)
         case QEvent::KeyPress: {
             auto key = static_cast<QKeyEvent*>(event);
             QWidget* focus = QApplication::focusWidget();
-            if (key->key() != Qt::Key_Escape || !focus
-                || (focus != view && !view->isAncestorOf(focus))) {
+            QWidget* hovered = QApplication::widgetAt(QCursor::pos());
+            const bool inView = (focus && (focus == view || view->isAncestorOf(focus)))
+                || (hovered && (hovered == view || view->isAncestorOf(hovered)));
+            if (key->key() != Qt::Key_Escape || !inView) {
                 return false;
             }
             if (event->type() == QEvent::ShortcutOverride) {
