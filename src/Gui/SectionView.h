@@ -26,7 +26,6 @@
 #include <string>
 #include <vector>
 #include <QColor>
-#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <FCGlobal.h>
@@ -74,8 +73,7 @@ class ColorButton;
  * Quick section view of a 3D view: a single clipping plane that can be toggled
  * on and off. While the section is being edited the plane follows the current
  * selection (faces, edges, vertices, origin or datum planes) and can be moved
- * with an arrow or a numeric offset. The cut area is shown as a hatched cap,
- * which can be clicked after the section is confirmed to start a sketch on it.
+ * with an arrow or a numeric offset. The cut area is shown as a hatched cap.
  * One instance lives as a child of each 3D view, so the last plane is kept
  * while the section is turned off.
  */
@@ -152,10 +150,6 @@ private:
     bool planeFromSelection();
     bool handleKey(QKeyEvent* event, bool shortcutOverride);
     bool editingBlocked() const;
-    bool capAt(const SoEvent* ev) const;
-    void handleCapEvent(SoEventCallback* cb);
-    void setCapSelected(bool on);
-    void updateSketchButton();
     void applyState();
     void updateStepFromModel();
     void updateArrowSize();
@@ -171,7 +165,6 @@ private:
     void saveAppearance();
     void appearanceChanged();
     void setArrowHighlight(bool on);
-    void createSketch();
     Base::Vector3d planePoint() const;
     Base::Vector3d clipNormal() const;
     void onActivateView(const QWidget* activated);
@@ -183,9 +176,6 @@ private:
     bool reversed {false};
     PlaneState st;
     bool confirmed {false};
-    bool capSelected {false};
-    bool capPressed {false};
-    QElapsedTimer capClickTimer;
     std::vector<RefItem> refItems;
 
     // Cap appearance
@@ -221,6 +211,7 @@ private:
     bool showCap {true};
     std::vector<float> capTris;  // visible faces in world coordinates
     double modelSize {10.0};
+    double clipShift {0.0};  // tiny shift of the clip plane into the material
 
     // Panel
     QPointer<QDockWidget> dock;
@@ -228,7 +219,6 @@ private:
     QWidget* refsContainer {nullptr};
     QVBoxLayout* refsLayout {nullptr};
     QLabel* refsHint {nullptr};
-    QPointer<QPushButton> sketchOverlay;
     QWidget* axisWidget {nullptr};
     QComboBox* axisMode {nullptr};
     QLabel* axisLabel {nullptr};

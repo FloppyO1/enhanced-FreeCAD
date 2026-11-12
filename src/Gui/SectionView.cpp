@@ -23,11 +23,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
 #include <limits>
 #include <map>
 #include <numbers>
-#include <sstream>
 
 #include <Inventor/SbLine.h>
 #include <Inventor/actions/SoRayPickAction.h>
@@ -329,18 +327,6 @@ SectionView::SectionView(View3DInventor* view)
     buildSceneNodes();
     buildPanel();
     loadAppearance();
-
-    if (QWidget* host = view->getViewer()->getWidget()) {
-        sketchOverlay = new QPushButton(tr("Create Sketch on Section"), host);
-        sketchOverlay->setToolTip(
-            tr("Create a sketch on the selected cut face, in the active body if there is one")
-        );
-        sketchOverlay->hide();
-        connect(sketchOverlay, &QPushButton::clicked, this, [this]() {
-            createSketch();
-            setCapSelected(false);
-        });
-    }
 
     capTimer = new QTimer(this);
     capTimer->setSingleShot(true);
@@ -701,11 +687,6 @@ void SectionView::buildPanel()
     appLayout->addWidget(lineButton, 6, 1);
     layout->addWidget(appearanceBox);
 
-    auto sketchButton = new QPushButton(tr("Create Sketch on Plane"), panel);
-    sketchButton->setToolTip(
-        tr("Create a sketch on the current section plane, in the active body if there is one")
-    );
-    layout->addWidget(sketchButton);
     auto confirmButton = new QPushButton(tr("Confirm"), panel);
     confirmButton->setToolTip(
         tr("Lock the section: hide the panel, the arrow and the plane and keep only the cut model")
@@ -775,7 +756,6 @@ void SectionView::buildPanel()
             view->getViewer()->redraw();
         }
     });
-    connect(sketchButton, &QPushButton::clicked, this, &SectionView::createSketch);
     // clang-format on
 
     const auto appChildren = appearanceBox->findChildren<QWidget*>(
@@ -878,7 +858,6 @@ void SectionView::confirm()
     }
     confirmed = true;
     dragging = false;
-    capPressed = false;
     setArrowHighlight(false);
     updateArrowVisibility();
     dock->hide();
@@ -894,7 +873,6 @@ void SectionView::editAgain()
         return;
     }
     confirmed = false;
-    setCapSelected(false);
     updateArrowVisibility();
     rebuildReferenceList();
     dock->show();
@@ -934,8 +912,7 @@ void SectionView::setEnabled(bool on)
         else {
             qApp->removeEventFilter(this);
             detachSelection();
-            setCapSelected(false);
-            capTimer->stop();
+                    capTimer->stop();
             dragging = false;
             root->removeChild(overlay);
             root->removeChild(clip);
@@ -1313,7 +1290,11 @@ void SectionView::updatePlane()
         st.basePoint = st.axisPoint;
     }
 
-    clip->plane.setValue(SbPlane(toSb(clipNormal()), toSb(planePoint())));
+    // A face lying exactly on the plane would be clipped or kept unpredictably, which
+    // makes it flicker. The plane is moved by a tiny amount into the kept side so that
+    // such a face is always clipped and the cap in its place is always drawn.
+    clipShift = modelSize * 3e-5;
+    clip->plane.setValue(SbPlane(toSb(clipNormal()), toSb(planePoint() + clipNormal() * clipShift)));
     clip->on = true;
 
     arrowXform->translation.setValue(toSb(planePoint()));
@@ -1447,7 +1428,7 @@ void SectionView::renderCap(SoGLRenderAction* action)
     }
 
     Base::Vector3d n = clipNormal();
-    Base::Vector3d p = planePoint();
+    Base::Vector3d p = planePoint() + n * clipShift;
     double d = n * p;
 
     glPushAttrib(GL_ALL_ATTRIB_BITS);
@@ -1510,14 +1491,6 @@ void SectionView::renderCap(SoGLRenderAction* action)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     QColor fillColor = cs.fill;
-    if (capSelected) {
-        // the cut face picked for a sketch is tinted
-        fillColor = QColor(
-            (fillColor.red() + 60) / 2,
-            (fillColor.green() + 220) / 2,
-            (fillColor.blue() + 60) / 2
-        );
-    }
     glColor4f(
         static_cast<float>(fillColor.redF()),
         static_cast<float>(fillColor.greenF()),
@@ -1615,7 +1588,6 @@ void SectionView::eventCB(void* data, SoEventCallback* cb)
         return;
     }
     if (self->confirmed) {
-        self->handleCapEvent(cb);
         return;
     }
     if (self->arrowSwitch->whichChild.getValue() == SO_SWITCH_NONE) {
@@ -1679,144 +1651,6 @@ void SectionView::eventCB(void* data, SoEventCallback* cb)
     }
 }
 
-bool SectionView::capAt(const SoEvent* ev) const
-{
-    if (!view || !showCap || capTris.empty()) {
-        return false;
-    }
-    SbVec3f p1;
-    SbVec3f p2;
-    view->getViewer()->projectPointToLine(ev->getPosition(), p1, p2);
-    SbVec3f dir = p2 - p1;
-    if (dir.normalize() == 0.0F) {
-        return false;
-    }
-    const Base::Vector3d n = clipNormal();
-    const double d = n * planePoint();
-    const double o[3] = {p1[0], p1[1], p1[2]};
-    const double r[3] = {dir[0], dir[1], dir[2]};
-    const double denom = n.x * r[0] + n.y * r[1] + n.z * r[2];
-    if (std::fabs(denom) < 1e-9) {
-        return false;
-    }
-    const double tPlane = (d - (n.x * o[0] + n.y * o[1] + n.z * o[2])) / denom;
-    if (tPlane < 0.0) {
-        return false;
-    }
-    const double eps = modelSize * 1e-6;
-
-    // The cap is where the ray meets the plane inside a solid. It is hidden when the
-    // ray first crosses material that is kept; the point is inside a solid when the
-    // ray crosses its boundary an odd number of times beyond the plane.
-    int beyond = 0;
-    const size_t count = capTris.size() / 9;
-    for (size_t i = 0; i < count; ++i) {
-        const float* tri = &capTris[i * 9];
-        const double a[3] = {tri[0], tri[1], tri[2]};
-        const double e1[3] = {tri[3] - a[0], tri[4] - a[1], tri[5] - a[2]};
-        const double e2[3] = {tri[6] - a[0], tri[7] - a[1], tri[8] - a[2]};
-        const double pv[3] = {
-            r[1] * e2[2] - r[2] * e2[1],
-            r[2] * e2[0] - r[0] * e2[2],
-            r[0] * e2[1] - r[1] * e2[0]
-        };
-        const double det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2];
-        if (std::fabs(det) < 1e-18) {
-            continue;
-        }
-        const double tv[3] = {o[0] - a[0], o[1] - a[1], o[2] - a[2]};
-        const double u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) / det;
-        if (u < 0.0 || u > 1.0) {
-            continue;
-        }
-        const double qv[3] = {
-            tv[1] * e1[2] - tv[2] * e1[1],
-            tv[2] * e1[0] - tv[0] * e1[2],
-            tv[0] * e1[1] - tv[1] * e1[0]
-        };
-        const double v = (r[0] * qv[0] + r[1] * qv[1] + r[2] * qv[2]) / det;
-        if (v < 0.0 || u + v > 1.0) {
-            continue;
-        }
-        const double t = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) / det;
-        if (t < 0.0) {
-            continue;
-        }
-        if (t > tPlane + eps) {
-            ++beyond;
-        }
-        else if (t < tPlane - eps) {
-            const double side = n.x * (o[0] + r[0] * t) + n.y * (o[1] + r[1] * t)
-                + n.z * (o[2] + r[2] * t) - d;
-            if (side >= 0.0) {
-                return false;  // kept geometry in front of the cap
-            }
-        }
-    }
-    return beyond % 2 == 1;
-}
-
-void SectionView::handleCapEvent(SoEventCallback* cb)
-{
-    const SoEvent* ev = cb->getEvent();
-    if (SoMouseButtonEvent::isButtonPressEvent(ev, SoMouseButtonEvent::BUTTON1)) {
-        capPressed = capAt(ev);
-        if (capPressed) {
-            cb->setHandled();
-        }
-    }
-    else if (SoMouseButtonEvent::isButtonReleaseEvent(ev, SoMouseButtonEvent::BUTTON1)) {
-        if (capPressed) {
-            capPressed = false;
-            cb->setHandled();
-            if (capAt(ev)) {
-                bool twice = capSelected && capClickTimer.isValid()
-                    && capClickTimer.elapsed() < QApplication::doubleClickInterval();
-                if (twice) {
-                    // double click on the cut face: sketch on it
-                    capClickTimer.invalidate();
-                    setCapSelected(false);
-                    createSketch();
-                }
-                else {
-                    setCapSelected(true);
-                    capClickTimer.start();
-                }
-            }
-        }
-        else if (capSelected) {
-            setCapSelected(false);
-        }
-    }
-}
-
-void SectionView::setCapSelected(bool on)
-{
-    if (capSelected == on) {
-        return;
-    }
-    capSelected = on;
-    updateSketchButton();
-    if (view) {
-        view->getViewer()->redraw();
-    }
-}
-
-void SectionView::updateSketchButton()
-{
-    if (!sketchOverlay || !view) {
-        return;
-    }
-    QWidget* host = view->getViewer()->getWidget();
-    bool show = enabled && confirmed && capSelected;
-    if (show && host) {
-        sketchOverlay->adjustSize();
-        sketchOverlay->move((host->width() - sketchOverlay->width()) / 2, 40);
-        sketchOverlay->raise();
-    }
-    sketchOverlay->setVisible(show);
-}
-
 bool SectionView::editingBlocked() const
 {
     return !view || QApplication::activeModalWidget() || QApplication::activePopupWidget()
@@ -1851,13 +1685,6 @@ bool SectionView::handleKey(QKeyEvent* event, bool shortcutOverride)
         return false;
     }
     if (confirmed) {
-        // only deselects a picked cut face
-        if (esc && capSelected && inView) {
-            if (!shortcutOverride) {
-                setCapSelected(false);
-            }
-            return true;
-        }
         return false;
     }
     if (!shortcutOverride) {
@@ -1887,56 +1714,8 @@ bool SectionView::eventFilter(QObject* watched, QEvent* event)
             return false;
         case QEvent::KeyPress:
             return handleKey(static_cast<QKeyEvent*>(event), false);
-        case QEvent::Resize:
-            if (view && sketchOverlay && sketchOverlay->isVisible()
-                && watched == view->getViewer()->getWidget()) {
-                updateSketchButton();
-            }
-            return false;
         default:
             return false;
-    }
-}
-
-void SectionView::createSketch()
-{
-    if (!view || !enabled) {
-        return;
-    }
-    getMainWindow()->setActiveWindow(view);
-    // the sketch normal points away from the kept material
-    Base::Vector3d p = planePoint();
-    Base::Vector3d n = -clipNormal();
-
-    std::ostringstream str;
-    str << std::setprecision(15);
-    str << "_pl = FreeCAD.Placement(FreeCAD.Vector(" << p.x << ", " << p.y << ", " << p.z
-        << "), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(" << n.x << ", " << n.y
-        << ", " << n.z << ")))\n"
-        << "_body = FreeCADGui.ActiveDocument.ActiveView.getActiveObject('pdbody')\n"
-        << "if _body:\n"
-        << "    _sk = _body.newObject('Sketcher::SketchObject', 'Sketch')\n"
-        << "    _xy = [f for f in _body.Origin.OriginFeatures if f.Role == 'XY_Plane'][0]\n"
-        << "    _sk.AttachmentSupport = [(_xy, '')]\n"
-        << "    _sk.MapMode = 'FlatFace'\n"
-        << "    _sk.AttachmentOffset = _body.getGlobalPlacement().inverse().multiply(_pl)\n"
-        << "else:\n"
-        << "    _sk = FreeCAD.ActiveDocument.addObject('Sketcher::SketchObject', 'Sketch')\n"
-        << "    _sk.Placement = _pl\n"
-        << "FreeCAD.ActiveDocument.recompute()\n"
-        << "FreeCADGui.ActiveDocument.setEdit(_sk)\n";
-
-    int tid = Command::openActiveDocumentCommand(
-        std::string(QT_TRANSLATE_NOOP("Command", "Create sketch on section plane"))
-    );
-    try {
-        Command::runCommand(Command::Doc, "import FreeCAD, FreeCADGui");
-        Command::runCommand(Command::Doc, str.str().c_str());
-        Command::commitCommand(tid);
-    }
-    catch (const Base::Exception& e) {
-        Command::abortCommand(tid);
-        e.reportException();
     }
 }
 
