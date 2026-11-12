@@ -642,7 +642,7 @@ void StdWorkbench::setupContextMenu(const char* recipient, MenuItem* item) const
         auto StdViews = new MenuItem;
         StdViews->setCommand("Standard Views");
 
-        *StdViews << "Std_ViewIsometric" << "Separator" << "Std_ViewHome" << "Std_ViewFront"
+        *StdViews << "Std_ViewIsometric" << "Std_ViewOrientationCube" << "Separator" << "Std_ViewHome" << "Std_ViewFront"
                   << "Std_ViewTop" << "Std_ViewRight"
                   << "Std_ViewRear" << "Std_ViewBottom" << "Std_ViewLeft"
                   << "Separator" << "Std_ViewRotateLeft" << "Std_ViewRotateRight";

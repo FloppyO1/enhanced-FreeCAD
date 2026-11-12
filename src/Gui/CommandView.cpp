@@ -41,6 +41,7 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <QImageReader>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPointer>
@@ -69,6 +70,7 @@
 #include "Control.h"
 #include "Clipping.h"
 #include "SectionView.h"
+#include "ViewOrientationCube.h"
 #include "DemoMode.h"
 #include "Dialogs/DlgSettingsImageImp.h"
 #include "Document.h"
@@ -789,6 +791,56 @@ bool StdCmdSectionView::isActive()
 }
 
 //===========================================================================
+// Std_ViewOrientationCube
+//===========================================================================
+
+DEF_STD_CMD_A(StdCmdViewOrientationCube)
+
+StdCmdViewOrientationCube::StdCmdViewOrientationCube()
+    : Command("Std_ViewOrientationCube")
+{
+    sGroup = "Standard-View";
+    sMenuText = QT_TR_NOOP("Orientation &Cube");
+    sToolTipText = QT_TR_NOOP(
+        "Fits the view and shows a large orientation cube around the model.\n"
+        "Click a face, edge or corner of the cube to look at the model from there.\n"
+        "Esc or the command again hides the cube."
+    );
+    sWhatsThis = "Std_ViewOrientationCube";
+    sStatusTip = sToolTipText;
+    sPixmap = "view-axonometric";
+    sAccel = "Space";
+    eType = Alter3DView;
+}
+
+void StdCmdViewOrientationCube::activated(int iMsg)
+{
+    Q_UNUSED(iMsg);
+    // Space used to toggle the visibility: keep that when the keyboard focus is
+    // outside the 3D views, e.g. in the tree view
+    QWidget* focus = QApplication::focusWidget();
+    View3DInventor* focusView = nullptr;
+    for (QWidget* w = focus; w && !focusView; w = w->parentWidget()) {
+        focusView = qobject_cast<View3DInventor*>(w);
+    }
+    if (focus && !focusView && !qobject_cast<QMenu*>(focus)) {
+        if (Selection().size() != 0) {
+            Application::Instance->commandManager().runCommandByName("Std_ToggleVisibility");
+        }
+        return;
+    }
+    auto view = focusView ? focusView
+                          : qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
+    ViewOrientationCube::toggle(view);
+}
+
+bool StdCmdViewOrientationCube::isActive()
+{
+    return qobject_cast<View3DInventor*>(getMainWindow()->activeWindow()) != nullptr
+        || Selection().size() != 0;
+}
+
+//===========================================================================
 // StdCmdDrawStyle
 //===========================================================================
 class StdCmdDrawStyle: public Gui::Command
@@ -1025,7 +1077,8 @@ StdCmdToggleVisibility::StdCmdToggleVisibility()
     sStatusTip = sToolTipText;
     sWhatsThis = "Std_ToggleVisibility";
     sPixmap = "Std_ToggleVisibility";
-    sAccel = "Space";
+    // Space belongs to Std_ViewOrientationCube, which toggles the visibility itself
+    // when the keyboard focus is outside the 3D views
     eType = Alter3DView;
 }
 
@@ -4325,6 +4378,7 @@ void CreateViewStdCommands()
     rcCmdMgr.addCommand(new StdPerspectiveCamera());
     rcCmdMgr.addCommand(new StdCmdToggleClipPlane());
     rcCmdMgr.addCommand(new StdCmdSectionView());
+    rcCmdMgr.addCommand(new StdCmdViewOrientationCube());
     rcCmdMgr.addCommand(new StdCmdDrawStyle());
     rcCmdMgr.addCommand(new StdCmdViewSaveCamera());
     rcCmdMgr.addCommand(new StdCmdViewRestoreCamera());

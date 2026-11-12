@@ -26,6 +26,8 @@
 #include <CXX/Extensions.hxx>
 #include <QColor>
 #include <FCGlobal.h>
+#include <Inventor/SbRotation.h>
+#include "Inventor/SoNaviCube.h"
 
 class SoEvent;
 class SoNode;
@@ -75,6 +77,15 @@ public:
     static void setNaviCubeCommands(const std::vector<std::string>& cmd);
     static int getNaviCubeSize();
     SoNode* getCoinNode() const;
+
+    /// Camera orientation that looks at the face, edge or corner  id of the cube.
+    static SbRotation getFaceOrientation(Gui::SoNaviCube::PickId id);
+    /// Like getFaceOrientation(), but keeps the roll of  viewer's camera closest to the
+    /// current one (the "rotate to nearest" behavior of the cube).
+    static SbRotation getNearestFaceOrientation(
+        Gui::View3DInventorViewer* viewer,
+        Gui::SoNaviCube::PickId id
+    );
 
 private:
     NaviCubeImplementation* naviCubeImplementation;

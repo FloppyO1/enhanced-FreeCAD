@@ -121,8 +121,12 @@ private:
 
     void setHilite(PickId);
 
-    FaceType getFaceType(PickId) const;
-    SbRotation getFaceRotation(PickId) const;
+    friend class NaviCube;
+    static FaceType getFaceType(PickId);
+    SbRotation getFaceRotation(PickId id) const
+    {
+        return NaviCube::getFaceOrientation(id);
+    }
 
     QString str(const char* str);
     QMenu* createNaviCubeMenu();
@@ -135,7 +139,10 @@ private:
         int viewportHeight
     );
 
-    SbRotation getNearestOrientation(PickId pickId);
+    SbRotation getNearestOrientation(PickId pickId)
+    {
+        return NaviCube::getNearestFaceOrientation(viewer, pickId);
+    }
     qreal getPhysicalCubeWidgetSize();
 
 public:
@@ -488,7 +495,7 @@ void NaviCubeImplementation::requestRedraw(bool touchNode)
     }
 }
 
-FaceType NaviCubeImplementation::getFaceType(PickId id) const
+FaceType NaviCubeImplementation::getFaceType(PickId id)
 {
     switch (id) {
         default:
@@ -535,7 +542,7 @@ FaceType NaviCubeImplementation::getFaceType(PickId id) const
     }
 }
 
-SbRotation NaviCubeImplementation::getFaceRotation(PickId id) const
+SbRotation NaviCube::getFaceOrientation(PickId id)
 {
     const auto makeFaceRotation = [](SbVec3f x, SbVec3f z, float rotZ) {
         SbVec3f y = x.cross(-z);
@@ -956,10 +963,10 @@ void NaviCubeImplementation::resetClickState()
     clickTimer.invalidate();
 }
 
-SbRotation NaviCubeImplementation::getNearestOrientation(PickId pickId)
+SbRotation NaviCube::getNearestFaceOrientation(Gui::View3DInventorViewer* viewer, PickId pickId)
 {
     SbRotation cameraOrientation = viewer->getCameraOrientation();
-    SbRotation standardOrientation = getFaceRotation(pickId);
+    SbRotation standardOrientation = getFaceOrientation(pickId);
 
     SbVec3f cameraZ;
     cameraOrientation.multVec(SbVec3f(0, 0, 1), cameraZ);
@@ -1002,7 +1009,7 @@ SbRotation NaviCubeImplementation::getNearestOrientation(PickId pickId)
     // compared to +90 and -90 degree orientations and the +90 and -90 degree orientations are
     // preferred compared to an upside down standard orientation
     float f = 0.00001F;
-    FaceType faceType = getFaceType(pickId);
+    FaceType faceType = NaviCubeImplementation::getFaceType(pickId);
 
     // Find the angle to rotate to the nearest orientation
     if (faceType == FaceType::Corner) {
