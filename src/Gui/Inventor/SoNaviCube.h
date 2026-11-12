@@ -125,6 +125,10 @@ public:
     void clearLabelTextures();
     [[nodiscard]] PickId pickAt(const SbVec2s& point) const;
 
+    /// Polygon (unit cube spanning -1..1, counter-clockwise seen from outside) of the main, edge
+    /// or corner face  id for the given chamfer size. Empty for the other ids.
+    [[nodiscard]] static std::vector<SbVec3f> cubeFacePolygon(PickId id, float chamfer);
+
 protected:
     ~SoNaviCube() override;
 
@@ -185,6 +189,13 @@ private:
     void ensureGeometry() const;
     void rebuildGeometry() const;
     void addCubeFace(const SbVec3f& x, const SbVec3f& z, CubeFaceKind kind, PickId pickId) const;
+    static std::vector<SbVec3f> makeCubeFacePolygon(
+        const SbVec3f& x,
+        const SbVec3f& z,
+        CubeFaceKind kind,
+        float chamfer
+    );
+    static bool cubeFaceDefinition(PickId id, SbVec3f& x, SbVec3f& z, CubeFaceKind& kind);
     void rebuildButtonFaces() const;
     void addButtonFace(PickId pickId) const;
 

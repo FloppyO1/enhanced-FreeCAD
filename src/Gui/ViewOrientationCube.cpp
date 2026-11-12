@@ -59,6 +59,7 @@
 
 #include "ViewOrientationCube.h"
 #include "NaviCube.h"
+#include "Inventor/SoNaviCube.h"
 #include "Selection/Selection.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
@@ -70,58 +71,16 @@ using PickId = SoNaviCube::PickId;
 namespace
 {
 constexpr const char* objectNameOfCube = "ViewOrientationCube";
-// half width of the central (face) part of each cube side, the cube spans -1..1
-constexpr float faceBand = 0.6F;
-constexpr float faceTransparency = 0.88F;
-constexpr float hiliteTransparency = 0.55F;
-constexpr int regionCount = 27;
+constexpr float faceTransparency = 0.82F;
+constexpr float hiliteTransparency = 0.5F;
+constexpr int zoneCount = 26;  // PickId::Front .. PickId::RearBottomRight
 
-int regionIndex(int sx, int sy, int sz)
+PickId pickIdOfZone(int zone)
 {
-    return (sx + 1) * 9 + (sy + 1) * 3 + (sz + 1);
-}
-
-// The same face, edge and corner naming as the navigation cube:
-// front is -Y, right is +X, top is +Z.
-PickId pickIdOfRegion(int region)
-{
-    if (region < 0 || region >= regionCount) {
+    if (zone < 0 || zone >= zoneCount) {
         return PickId::None;
     }
-    const int sx = region / 9 - 1;
-    const int sy = (region / 3) % 3 - 1;
-    const int sz = region % 3 - 1;
-    const bool front = sy < 0;
-    switch (std::abs(sx) + std::abs(sy) + std::abs(sz)) {
-        case 1:
-            if (sx != 0) {
-                return sx > 0 ? PickId::Right : PickId::Left;
-            }
-            if (sy != 0) {
-                return front ? PickId::Front : PickId::Rear;
-            }
-            return sz > 0 ? PickId::Top : PickId::Bottom;
-        case 2:
-            if (sy != 0 && sz != 0) {
-                return front ? (sz > 0 ? PickId::FrontTop : PickId::FrontBottom)
-                             : (sz > 0 ? PickId::RearTop : PickId::RearBottom);
-            }
-            if (sy != 0) {
-                return front ? (sx > 0 ? PickId::FrontRight : PickId::FrontLeft)
-                             : (sx > 0 ? PickId::RearRight : PickId::RearLeft);
-            }
-            return sz > 0 ? (sx > 0 ? PickId::TopRight : PickId::TopLeft)
-                          : (sx > 0 ? PickId::BottomRight : PickId::BottomLeft);
-        case 3:
-            if (front) {
-                return sz > 0 ? (sx > 0 ? PickId::FrontTopRight : PickId::FrontTopLeft)
-                              : (sx > 0 ? PickId::FrontBottomRight : PickId::FrontBottomLeft);
-            }
-            return sz > 0 ? (sx > 0 ? PickId::RearTopRight : PickId::RearTopLeft)
-                          : (sx > 0 ? PickId::RearBottomRight : PickId::RearBottomLeft);
-        default:
-            return PickId::None;
-    }
+    return static_cast<PickId>(zone + 1);
 }
 
 ParameterGrp::handle naviCubeParameters()
@@ -135,6 +94,19 @@ SbColor colorParameter(const char* name, unsigned long def)
 {
     Base::Color color(static_cast<uint32_t>(naviCubeParameters()->GetUnsigned(name, def)));
     return {color.r, color.g, color.b};
+}
+
+// The colors of the navigation cube: base, emphasis (borders and labels) and hilite.
+void naviCubeColors(SbColor& base, SbColor& emphase, SbColor& hilite)
+{
+    auto hGrp = naviCubeParameters();
+    Base::Color bc(static_cast<uint32_t>(hGrp->GetUnsigned("BaseColor", 3806916544UL)));
+    base = SbColor(bc.r, bc.g, bc.b);
+    const unsigned long defEmphase = bc.r + bc.g + bc.b >= 1.5F ? 255UL : 4294967295UL;
+    Base::Color ec(static_cast<uint32_t>(hGrp->GetUnsigned("EmphaseColor", defEmphase)));
+    emphase = SbColor(ec.r, ec.g, ec.b);
+    Base::Color hc(static_cast<uint32_t>(hGrp->GetUnsigned("HiliteColor", 2867003391UL)));
+    hilite = SbColor(hc.r, hc.g, hc.b);
 }
 
 // Label texture: the text centered on a transparent square.
@@ -154,7 +126,7 @@ void setLabelImage(SoTexture2* texture, const QString& text)
         font.setPixelSize(pixels);
     }
     painter.setFont(font);
-    painter.setPen(QColor(30, 30, 30, 150));
+    painter.setPen(Qt::white);
     painter.drawText(image.rect(), Qt::AlignCenter, text);
     painter.end();
 
@@ -218,10 +190,24 @@ void ViewOrientationCube::toggle(View3DInventor* view)
 
 void ViewOrientationCube::buildSceneNodes()
 {
-    root = new SoSeparator();
-    root->ref();
-    root->setName("ViewOrientationCube");
-    root->renderCaching = SoSeparator::OFF;
+    if (!root) {
+        root = new SoSeparator();
+        root->ref();
+        root->setName("ViewOrientationCube");
+        root->renderCaching = SoSeparator::OFF;
+    }
+    else {
+        root->removeAllChildren();
+    }
+
+    auto hGrp = naviCubeParameters();
+    const float chamfer
+        = std::clamp(static_cast<float>(hGrp->GetFloat("ChamferSize", 0.12)), 0.05F, 0.18F);
+    const float borderWidth = std::max(1.0F, static_cast<float>(hGrp->GetFloat("BorderWidth", 1.1)));
+    SbColor baseColor;
+    SbColor emphaseColor;
+    SbColor hiliteColor;
+    naviCubeColors(baseColor, emphaseColor, hiliteColor);
 
     // the cube is picked by ViewOrientationCube itself, never by the scene
     auto pickStyle = new SoPickStyle();
@@ -246,131 +232,77 @@ void ViewOrientationCube::buildSceneNodes()
     hints->shapeType = SoShapeHints::SOLID;
     root->addChild(hints);
 
-    // Each side is split in 3x3 parts: the middle one is the face, the outer ones
-    // belong to the edges and corners shared with the next sides.
-    const std::array<float, 4> grid {-1.0F, -faceBand, faceBand, 1.0F};
+    // The zones are the faces, edges and corners of the navigation cube, with the same shape.
+    zones.clear();
     std::vector<SbVec3f> points;
-    std::vector<int32_t> faceIndices;
-    std::vector<int32_t> materialIndices;
-    std::vector<SbVec3f> linePoints;
-    for (int axis = 0; axis < 3; ++axis) {
-        const int u = (axis + 1) % 3;
-        const int v = (axis + 2) % 3;
-        for (int side : {-1, 1}) {
-            for (int i = 0; i < 3; ++i) {
-                for (int j = 0; j < 3; ++j) {
-                    std::array<SbVec3f, 4> quad;
-                    const std::array<std::array<int, 2>, 4> corners {
-                        {{i, j}, {i + 1, j}, {i + 1, j + 1}, {i, j + 1}}
-                    };
-                    for (size_t k = 0; k < 4; ++k) {
-                        SbVec3f p;
-                        p[axis] = static_cast<float>(side);
-                        p[u] = grid[corners[k][0]];
-                        p[v] = grid[corners[k][1]];
-                        quad[k] = p;
-                    }
-                    if (side < 0) {
-                        std::swap(quad[1], quad[3]);
-                    }
-                    const auto base = static_cast<int32_t>(points.size());
-                    for (const auto& p : quad) {
-                        points.push_back(p);
-                    }
-                    faceIndices.insert(faceIndices.end(), {base, base + 1, base + 2, base + 3, -1});
-                    std::array<int, 3> signs {};
-                    signs[axis] = side;
-                    signs[u] = i - 1;
-                    signs[v] = j - 1;
-                    materialIndices.push_back(regionIndex(signs[0], signs[1], signs[2]));
-                }
-            }
-            // thin lines between the face and its edges and corners
-            for (float value : {-faceBand, faceBand}) {
-                SbVec3f a;
-                SbVec3f b;
-                a[axis] = b[axis] = static_cast<float>(side);
-                a[u] = -1.0F;
-                b[u] = 1.0F;
-                a[v] = b[v] = value;
-                linePoints.push_back(a);
-                linePoints.push_back(b);
-                a[v] = -1.0F;
-                b[v] = 1.0F;
-                a[u] = b[u] = value;
-                linePoints.push_back(a);
-                linePoints.push_back(b);
-            }
+    std::vector<std::vector<int32_t>> zoneIndices(zoneCount);
+    std::vector<int32_t> lineIndices;
+    for (int zone = 0; zone < zoneCount; ++zone) {
+        std::vector<SbVec3f> polygon = SoNaviCube::cubeFacePolygon(pickIdOfZone(zone), chamfer);
+        if (polygon.size() < 3) {
+            zones.emplace_back();
+            continue;
         }
+        // counterclockwise seen from outside
+        SbVec3f normal(0, 0, 0);
+        SbVec3f centroid(0, 0, 0);
+        for (size_t i = 0; i < polygon.size(); ++i) {
+            const SbVec3f& p = polygon[i];
+            const SbVec3f& q = polygon[(i + 1) % polygon.size()];
+            normal += p.cross(q);
+            centroid += p;
+        }
+        if (normal.dot(centroid) < 0.0F) {
+            std::reverse(polygon.begin(), polygon.end());
+        }
+        const auto base = static_cast<int32_t>(points.size());
+        for (size_t i = 0; i < polygon.size(); ++i) {
+            points.push_back(polygon[i]);
+            zoneIndices[zone].push_back(base + static_cast<int32_t>(i));
+            lineIndices.push_back(base + static_cast<int32_t>(i));
+        }
+        zoneIndices[zone].push_back(-1);
+        lineIndices.push_back(base);
+        lineIndices.push_back(-1);
+        zones.push_back(std::move(polygon));
     }
 
-    auto faces = new SoSeparator();
-    faceMaterial = new SoMaterial();
-    SbColor base = colorParameter("BaseColor", 3806916544UL);
-    faceMaterial->diffuseColor.setNum(regionCount);
-    faceMaterial->transparency.setNum(regionCount);
-    for (int k = 0; k < regionCount; ++k) {
-        faceMaterial->diffuseColor.set1Value(k, base);
-        faceMaterial->transparency.set1Value(k, faceTransparency);
-    }
-    faces->addChild(faceMaterial);
-    auto binding = new SoMaterialBinding();
-    binding->value = SoMaterialBinding::PER_FACE_INDEXED;
-    faces->addChild(binding);
     auto coords = new SoCoordinate3();
     coords->point.setValues(0, static_cast<int>(points.size()), points.data());
-    faces->addChild(coords);
-    auto faceSet = new SoIndexedFaceSet();
-    faceSet->coordIndex.setValues(0, static_cast<int>(faceIndices.size()), faceIndices.data());
-    faceSet->materialIndex.setValues(
-        0,
-        static_cast<int>(materialIndices.size()),
-        materialIndices.data()
-    );
-    faces->addChild(faceSet);
-    root->addChild(faces);
+    root->addChild(coords);
 
-    // cube outline and the borders of the faces
-    std::vector<SbVec3f> edgePoints;
-    for (int axis = 0; axis < 3; ++axis) {
-        const int u = (axis + 1) % 3;
-        const int v = (axis + 2) % 3;
-        for (int su : {-1, 1}) {
-            for (int sv : {-1, 1}) {
-                SbVec3f a;
-                SbVec3f b;
-                a[axis] = -1.0F;
-                b[axis] = 1.0F;
-                a[u] = b[u] = static_cast<float>(su);
-                a[v] = b[v] = static_cast<float>(sv);
-                edgePoints.push_back(a);
-                edgePoints.push_back(b);
-            }
+    // one material per zone, so that the zone under the mouse can be highlighted
+    faceMaterials.assign(zoneCount, nullptr);
+    for (int zone = 0; zone < zoneCount; ++zone) {
+        if (zones[zone].size() < 3) {
+            continue;
         }
-    }
-    auto addLines = [this](const std::vector<SbVec3f>& pts, float width, float gray, float alpha) {
         auto sep = new SoSeparator();
-        auto mat = new SoMaterial();
-        mat->diffuseColor.setValue(gray, gray, gray);
-        mat->transparency.setValue(alpha);
-        sep->addChild(mat);
-        auto style = new SoDrawStyle();
-        style->lineWidth = width;
-        sep->addChild(style);
-        auto lineCoords = new SoCoordinate3();
-        lineCoords->point.setValues(0, static_cast<int>(pts.size()), pts.data());
-        sep->addChild(lineCoords);
-        auto lines = new SoIndexedLineSet();
-        std::vector<int32_t> idx;
-        for (int32_t k = 0; k + 1 < static_cast<int32_t>(pts.size()); k += 2) {
-            idx.insert(idx.end(), {k, k + 1, -1});
-        }
-        lines->coordIndex.setValues(0, static_cast<int>(idx.size()), idx.data());
-        sep->addChild(lines);
+        auto material = new SoMaterial();
+        material->diffuseColor.setValue(baseColor);
+        material->transparency.setValue(faceTransparency);
+        sep->addChild(material);
+        auto faceSet = new SoIndexedFaceSet();
+        const auto& idx = zoneIndices[zone];
+        faceSet->coordIndex.setValues(0, static_cast<int>(idx.size()), idx.data());
+        sep->addChild(faceSet);
         root->addChild(sep);
-    };
-    addLines(edgePoints, 2.0F, 0.25F, 0.2F);
-    addLines(linePoints, 1.0F, 0.35F, 0.6F);
+        faceMaterials[zone] = material;
+    }
+
+    // borders of all the zones, like the navigation cube
+    auto borders = new SoSeparator();
+    auto borderMaterial = new SoMaterial();
+    borderMaterial->diffuseColor.setValue(emphaseColor);
+    borderMaterial->transparency.setValue(0.35F);
+    borders->addChild(borderMaterial);
+    auto borderStyle = new SoDrawStyle();
+    borderStyle->lineWidth = borderWidth + 0.5F;
+    borders->addChild(borderStyle);
+    auto borderSet = new SoIndexedLineSet();
+    borderSet->coordIndex.setValues(0, static_cast<int>(lineIndices.size()), lineIndices.data());
+    borders->addChild(borderSet);
+    root->addChild(borders);
 
     // Labels of the six faces, with the texts and the translations of the navigation cube.
     struct LabelFace
@@ -389,14 +321,14 @@ void ViewOrientationCube::buildSceneNodes()
         {"TextBottom", QT_TRANSLATE_NOOP("NaviCubeSettings", "BOTTOM"), {0, 0, -1}, {1, 0, 0}, {0, -1, 0}},
         {"TextLeft", QT_TRANSLATE_NOOP("NaviCubeSettings", "LEFT"), {-1, 0, 0}, {0, -1, 0}, {0, 0, 1}},
     }};
-    auto hGrp = naviCubeParameters();
+    const float labelHalf = 1.0F - 2.0F * chamfer;
     for (const auto& label : labels) {
         QByteArray def = NaviCubeSettings::tr(label.text).toUtf8();
         std::string text = hGrp->GetASCII(label.parameter, def.constData());
 
         auto sep = new SoSeparator();
         auto mat = new SoMaterial();
-        mat->diffuseColor.setValue(1.0F, 1.0F, 1.0F);
+        mat->diffuseColor.setValue(emphaseColor);
         sep->addChild(mat);
         auto texture = new SoTexture2();
         texture->model = SoTexture2::MODULATE;
@@ -410,8 +342,8 @@ void ViewOrientationCube::buildSceneNodes()
         sep->addChild(texCoords);
         auto quadCoords = new SoCoordinate3();
         const SbVec3f c = label.normal * 1.002F;
-        const SbVec3f r = label.right * faceBand;
-        const SbVec3f t = label.up * faceBand;
+        const SbVec3f r = label.right * labelHalf;
+        const SbVec3f t = label.up * labelHalf;
         quadCoords->point.set1Value(0, c - r - t);
         quadCoords->point.set1Value(1, c + r - t);
         quadCoords->point.set1Value(2, c + r + t);
@@ -423,6 +355,7 @@ void ViewOrientationCube::buildSceneNodes()
         sep->addChild(quad);
         root->addChild(sep);
     }
+    hilite = -1;
 }
 
 bool ViewOrientationCube::show()
@@ -434,6 +367,8 @@ bool ViewOrientationCube::show()
     if (box.isEmpty()) {
         return false;
     }
+    // rebuild, so that changes of the navigation cube settings are taken into account
+    buildSceneNodes();
     float dx {};
     float dy {};
     float dz {};
@@ -480,7 +415,7 @@ void ViewOrientationCube::hide()
     viewer->redraw();
 }
 
-int ViewOrientationCube::pickRegion(const SbVec2s& pos) const
+int ViewOrientationCube::pickZone(const SbVec2s& pos) const
 {
     if (!shown) {
         return -1;
@@ -492,62 +427,61 @@ int ViewOrientationCube::pickRegion(const SbVec2s& pos) const
     const SbVec3f origin = (p1 - center) / half;
     const SbVec3f dir = (p2 - p1) / half;
 
-    float tmin = -std::numeric_limits<float>::max();
-    float tmax = std::numeric_limits<float>::max();
-    int entryAxis = -1;
-    for (int k = 0; k < 3; ++k) {
-        if (std::fabs(dir[k]) < 1e-12F) {
-            if (std::fabs(origin[k]) > 1.0F) {
-                return -1;
-            }
+    int best = -1;
+    float bestT = std::numeric_limits<float>::max();
+    for (size_t zone = 0; zone < zones.size(); ++zone) {
+        const auto& poly = zones[zone];
+        if (poly.size() < 3) {
             continue;
         }
-        float t1 = (-1.0F - origin[k]) / dir[k];
-        float t2 = (1.0F - origin[k]) / dir[k];
-        if (t1 > t2) {
-            std::swap(t1, t2);
+        SbVec3f normal(0, 0, 0);
+        for (size_t i = 0; i < poly.size(); ++i) {
+            normal += poly[i].cross(poly[(i + 1) % poly.size()]);
         }
-        if (t1 > tmin) {
-            tmin = t1;
-            entryAxis = k;
+        const float denom = normal.dot(dir);
+        if (denom >= -1e-12F) {
+            continue;  // back face or parallel
         }
-        tmax = std::min(tmax, t2);
+        const float t = normal.dot(poly[0] - origin) / denom;
+        if (t < 0.0F || t >= bestT) {
+            continue;
+        }
+        const SbVec3f hit = origin + dir * t;
+        bool inside = true;
+        for (size_t i = 0; i < poly.size() && inside; ++i) {
+            const SbVec3f edge = poly[(i + 1) % poly.size()] - poly[i];
+            inside = edge.cross(hit - poly[i]).dot(normal) >= 0.0F;
+        }
+        if (inside) {
+            bestT = t;
+            best = static_cast<int>(zone);
+        }
     }
-    if (entryAxis < 0 || tmin > tmax || tmin < 0.0F) {
-        return -1;
-    }
-    const SbVec3f hit = origin + dir * tmin;
-    std::array<int, 3> signs {};
-    for (int k = 0; k < 3; ++k) {
-        if (k == entryAxis) {
-            signs[k] = hit[k] > 0.0F ? 1 : -1;
-        }
-        else if (std::fabs(hit[k]) > faceBand) {
-            signs[k] = hit[k] > 0.0F ? 1 : -1;
-        }
-    }
-    return regionIndex(signs[0], signs[1], signs[2]);
+    return best;
 }
 
 PickId ViewOrientationCube::pickAt(const SbVec2s& pos) const
 {
-    return pickIdOfRegion(pickRegion(pos));
+    return pickIdOfZone(pickZone(pos));
 }
 
-void ViewOrientationCube::setHilite(int region)
+void ViewOrientationCube::setHilite(int zone)
 {
-    if (region == hilite) {
+    if (zone == hilite) {
         return;
     }
-    SbColor base = colorParameter("BaseColor", 3806916544UL);
-    if (hilite >= 0) {
-        faceMaterial->diffuseColor.set1Value(hilite, base);
-        faceMaterial->transparency.set1Value(hilite, faceTransparency);
+    SbColor base;
+    SbColor emphase;
+    SbColor hiliteColor;
+    naviCubeColors(base, emphase, hiliteColor);
+    if (hilite >= 0 && faceMaterials[hilite]) {
+        faceMaterials[hilite]->diffuseColor.setValue(base);
+        faceMaterials[hilite]->transparency.setValue(faceTransparency);
     }
-    hilite = region;
-    if (hilite >= 0) {
-        faceMaterial->diffuseColor.set1Value(hilite, colorParameter("HiliteColor", 2867003391UL));
-        faceMaterial->transparency.set1Value(hilite, hiliteTransparency);
+    hilite = zone;
+    if (hilite >= 0 && faceMaterials[hilite]) {
+        faceMaterials[hilite]->diffuseColor.setValue(hiliteColor);
+        faceMaterials[hilite]->transparency.setValue(hiliteTransparency);
     }
 }
 
@@ -652,7 +586,7 @@ bool ViewOrientationCube::eventFilter(QObject* watched, QEvent* event)
                 return false;
             }
             // hovering: highlight the cube, never the model
-            setHilite(pickRegion(toCoin(me->pos())));
+            setHilite(pickZone(toCoin(me->pos())));
             return true;
         }
         case QEvent::MouseButtonPress:

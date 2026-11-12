@@ -1529,37 +1529,14 @@ void SoNaviCube::rebuildGeometry() const
     const SbVec3f y(0.0F, 1.0F, 0.0F);
     const SbVec3f z(0.0F, 0.0F, 1.0F);
 
-    // Main faces
-    addCubeFace(x, z, CubeFaceKind::Main, PickId::Top);
-    addCubeFace(x, -y, CubeFaceKind::Main, PickId::Front);
-    addCubeFace(-y, -x, CubeFaceKind::Main, PickId::Left);
-    addCubeFace(-x, y, CubeFaceKind::Main, PickId::Rear);
-    addCubeFace(y, x, CubeFaceKind::Main, PickId::Right);
-    addCubeFace(x, -z, CubeFaceKind::Main, PickId::Bottom);
-
-    // Corner faces
-    addCubeFace(-x - y, x - y + z, CubeFaceKind::Corner, PickId::FrontTopRight);
-    addCubeFace(-x + y, -x - y + z, CubeFaceKind::Corner, PickId::FrontTopLeft);
-    addCubeFace(x + y, x - y - z, CubeFaceKind::Corner, PickId::FrontBottomRight);
-    addCubeFace(x - y, -x - y - z, CubeFaceKind::Corner, PickId::FrontBottomLeft);
-    addCubeFace(x - y, x + y + z, CubeFaceKind::Corner, PickId::RearTopRight);
-    addCubeFace(x + y, -x + y + z, CubeFaceKind::Corner, PickId::RearTopLeft);
-    addCubeFace(-x + y, x + y - z, CubeFaceKind::Corner, PickId::RearBottomRight);
-    addCubeFace(-x - y, -x + y - z, CubeFaceKind::Corner, PickId::RearBottomLeft);
-
-    // Edge faces
-    addCubeFace(x, z - y, CubeFaceKind::Edge, PickId::FrontTop);
-    addCubeFace(x, -z - y, CubeFaceKind::Edge, PickId::FrontBottom);
-    addCubeFace(x, y - z, CubeFaceKind::Edge, PickId::RearBottom);
-    addCubeFace(x, y + z, CubeFaceKind::Edge, PickId::RearTop);
-    addCubeFace(z, x + y, CubeFaceKind::Edge, PickId::RearRight);
-    addCubeFace(z, x - y, CubeFaceKind::Edge, PickId::FrontRight);
-    addCubeFace(z, -x - y, CubeFaceKind::Edge, PickId::FrontLeft);
-    addCubeFace(z, y - x, CubeFaceKind::Edge, PickId::RearLeft);
-    addCubeFace(y, z - x, CubeFaceKind::Edge, PickId::TopLeft);
-    addCubeFace(y, x + z, CubeFaceKind::Edge, PickId::TopRight);
-    addCubeFace(y, x - z, CubeFaceKind::Edge, PickId::BottomRight);
-    addCubeFace(y, -z - x, CubeFaceKind::Edge, PickId::BottomLeft);
+    for (PickId pickId : kCubeFacePickOrder) {
+        SbVec3f fx;
+        SbVec3f fz;
+        CubeFaceKind kind {};
+        if (cubeFaceDefinition(pickId, fx, fz, kind)) {
+            addCubeFace(fx, fz, kind, pickId);
+        }
+    }
 
     // Precompute cube and edge geometry arrays used by the scene graph nodes.
     {
@@ -1663,15 +1640,80 @@ void SoNaviCube::rebuildGeometry() const
 
 void SoNaviCube::addCubeFace(const SbVec3f& x, const SbVec3f& z, CubeFaceKind kind, PickId pickId) const
 {
-    auto& verts = faces[pickIndex(pickId)];
-    verts.clear();
+    faces[pickIndex(pickId)] = makeCubeFacePolygon(x, z, kind, this->chamfer);
+}
 
+bool SoNaviCube::cubeFaceDefinition(PickId id, SbVec3f& x, SbVec3f& z, CubeFaceKind& kind)
+{
+    const SbVec3f ex(1.0F, 0.0F, 0.0F);
+    const SbVec3f ey(0.0F, 1.0F, 0.0F);
+    const SbVec3f ez(0.0F, 0.0F, 1.0F);
+    kind = CubeFaceKind::Main;
+    switch (id) {
+        case PickId::Top: x = ex; z = ez; return true;
+        case PickId::Front: x = ex; z = -ey; return true;
+        case PickId::Left: x = -ey; z = -ex; return true;
+        case PickId::Rear: x = -ex; z = ey; return true;
+        case PickId::Right: x = ey; z = ex; return true;
+        case PickId::Bottom: x = ex; z = -ez; return true;
+        default: break;
+    }
+    kind = CubeFaceKind::Corner;
+    switch (id) {
+        case PickId::FrontTopRight: x = -ex - ey; z = ex - ey + ez; return true;
+        case PickId::FrontTopLeft: x = -ex + ey; z = -ex - ey + ez; return true;
+        case PickId::FrontBottomRight: x = ex + ey; z = ex - ey - ez; return true;
+        case PickId::FrontBottomLeft: x = ex - ey; z = -ex - ey - ez; return true;
+        case PickId::RearTopRight: x = ex - ey; z = ex + ey + ez; return true;
+        case PickId::RearTopLeft: x = ex + ey; z = -ex + ey + ez; return true;
+        case PickId::RearBottomRight: x = -ex + ey; z = ex + ey - ez; return true;
+        case PickId::RearBottomLeft: x = -ex - ey; z = -ex + ey - ez; return true;
+        default: break;
+    }
+    kind = CubeFaceKind::Edge;
+    switch (id) {
+        case PickId::FrontTop: x = ex; z = ez - ey; return true;
+        case PickId::FrontBottom: x = ex; z = -ez - ey; return true;
+        case PickId::RearBottom: x = ex; z = ey - ez; return true;
+        case PickId::RearTop: x = ex; z = ey + ez; return true;
+        case PickId::RearRight: x = ez; z = ex + ey; return true;
+        case PickId::FrontRight: x = ez; z = ex - ey; return true;
+        case PickId::FrontLeft: x = ez; z = -ex - ey; return true;
+        case PickId::RearLeft: x = ez; z = ey - ex; return true;
+        case PickId::TopLeft: x = ey; z = ez - ex; return true;
+        case PickId::TopRight: x = ey; z = ex + ez; return true;
+        case PickId::BottomRight: x = ey; z = ex - ez; return true;
+        case PickId::BottomLeft: x = ey; z = -ez - ex; return true;
+        default: break;
+    }
+    return false;
+}
+
+std::vector<SbVec3f> SoNaviCube::cubeFacePolygon(PickId id, float chamfer)
+{
+    SbVec3f x;
+    SbVec3f z;
+    CubeFaceKind kind {};
+    if (!cubeFaceDefinition(id, x, z, kind)) {
+        return {};
+    }
+    return makeCubeFacePolygon(x, z, kind, std::clamp(chamfer, 0.05F, 0.18F));
+}
+
+std::vector<SbVec3f> SoNaviCube::makeCubeFacePolygon(
+    const SbVec3f& x,
+    const SbVec3f& z,
+    CubeFaceKind kind,
+    float chamfer
+)
+{
+    std::vector<SbVec3f> verts;
     SbVec3f y = x.cross(-z);
 
     if (kind == CubeFaceKind::Corner) {
-        SbVec3f xC = x * this->chamfer;
-        SbVec3f yC = y * this->chamfer;
-        SbVec3f zC = z * (1.0F - 2.0F * this->chamfer);
+        SbVec3f xC = x * chamfer;
+        SbVec3f yC = y * chamfer;
+        SbVec3f zC = z * (1.0F - 2.0F * chamfer);
 
         verts.reserve(6);
         verts.emplace_back(zC - xC * 2.0F);
@@ -1682,9 +1724,9 @@ void SoNaviCube::addCubeFace(const SbVec3f& x, const SbVec3f& z, CubeFaceKind ki
         verts.emplace_back((zC - xC) + yC);
     }
     else if (kind == CubeFaceKind::Edge) {
-        SbVec3f x4 = x * (1.0F - this->chamfer * 4.0F);
-        SbVec3f yE = y * this->chamfer;
-        SbVec3f zE = z * (1.0F - this->chamfer);
+        SbVec3f x4 = x * (1.0F - chamfer * 4.0F);
+        SbVec3f yE = y * chamfer;
+        SbVec3f zE = z * (1.0F - chamfer);
 
         verts.reserve(4);
         verts.emplace_back((zE - x4) - yE);
@@ -1693,10 +1735,10 @@ void SoNaviCube::addCubeFace(const SbVec3f& x, const SbVec3f& z, CubeFaceKind ki
         verts.emplace_back((zE - x4) + yE);
     }
     else {
-        SbVec3f x2 = x * (1.0F - this->chamfer * 2.0F);
-        SbVec3f y2 = y * (1.0F - this->chamfer * 2.0F);
-        SbVec3f x4 = x * (1.0F - this->chamfer * 4.0F);
-        SbVec3f y4 = y * (1.0F - this->chamfer * 4.0F);
+        SbVec3f x2 = x * (1.0F - chamfer * 2.0F);
+        SbVec3f y2 = y * (1.0F - chamfer * 2.0F);
+        SbVec3f x4 = x * (1.0F - chamfer * 4.0F);
+        SbVec3f y4 = y * (1.0F - chamfer * 4.0F);
 
         verts.reserve(8);
         verts.emplace_back((z - x2) - y4);
@@ -1708,6 +1750,7 @@ void SoNaviCube::addCubeFace(const SbVec3f& x, const SbVec3f& z, CubeFaceKind ki
         verts.emplace_back((z - x4) + y2);
         verts.emplace_back((z - x2) + y4);
     }
+    return verts;
 }
 
 void SoNaviCube::rebuildButtonFaces() const

@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <vector>
 #include <QObject>
 #include <QPoint>
 #include <QPointer>
@@ -78,8 +79,8 @@ public:
 
 private:
     void buildSceneNodes();
-    int pickRegion(const SbVec2s& pos) const;
-    void setHilite(int region);
+    int pickZone(const SbVec2s& pos) const;
+    void setHilite(int zone);
     bool isViewerWidget(QObject* obj) const;
     SbVec2s toCoin(const QPoint& pos) const;
     void fitWhenIdle(int retries);
@@ -87,10 +88,12 @@ private:
     QPointer<View3DInventor> view;
     View3DInventorViewer* viewer {nullptr};
     SoSeparator* root {nullptr};
-    SoMaterial* faceMaterial {nullptr};
+    std::vector<SoMaterial*> faceMaterials;
     SoTransform* xform {nullptr};
     SoGroup* parent {nullptr};
     SbVec3f center;
+    /// Polygons of the zones (index is the pick id minus one), in the cube frame -1..1
+    std::vector<std::vector<SbVec3f>> zones;
     float half {1.0F};
     bool shown {false};
     int hilite {-1};
