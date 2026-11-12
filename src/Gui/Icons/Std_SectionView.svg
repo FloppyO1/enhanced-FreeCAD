@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" version="1.1">
+  <title>Std_SectionView</title>
+  <!-- remaining half of a box -->
+  <path d="M 6,22 L 22,12 L 34,18 L 34,52 L 18,60 L 6,52 Z" fill="#729fcf" stroke="#0b1521" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M 6,22 L 22,12 L 34,18 L 18,28 Z" fill="#a9c8ea" stroke="#0b1521" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M 18,28 L 18,60" fill="none" stroke="#0b1521" stroke-width="2"/>
+  <!-- cut face -->
+  <path d="M 18,28 L 34,18 L 34,52 L 18,60 Z" fill="#ef2929" stroke="#a40000" stroke-width="2" stroke-linejoin="round"/>
+  <!-- section plane -->
+  <path d="M 26,10 L 58,4 L 58,46 L 26,52 Z" fill="#fcaf3e" fill-opacity="0.45" stroke="#ce5c00" stroke-width="2" stroke-linejoin="round"/>
+  <!-- move arrow -->
+  <path d="M 42,28 L 56,28" fill="none" stroke="#ce5c00" stroke-width="3"/>
+  <path d="M 62,28 L 54,23 L 54,33 Z" fill="#ce5c00"/>
+</svg>

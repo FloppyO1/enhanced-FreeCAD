@@ -1,0 +1,1362 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+/****************************************************************************
+ *                                                                          *
+ *   Copyright (c) 2026 The FreeCAD project association AISBL               *
+ *                                                                          *
+ *   This file is part of FreeCAD.                                          *
+ *                                                                          *
+ *   FreeCAD is free software: you can redistribute it and/or modify it     *
+ *   under the terms of the GNU Lesser General Public License as            *
+ *   published by the Free Software Foundation, either version 2.1 of the   *
+ *   License, or (at your option) any later version.                        *
+ *                                                                          *
+ *   FreeCAD is distributed in the hope that it will be useful, but         *
+ *   WITHOUT ANY WARRANTY; without even the implied warranty of             *
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU       *
+ *   Lesser General Public License for more details.                        *
+ *                                                                          *
+ *   You should have received a copy of the GNU Lesser General Public       *
+ *   License along with FreeCAD. If not, see                                *
+ *   <https://www.gnu.org/licenses/>.                                       *
+ *                                                                          *
+ ***************************************************************************/
+
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <limits>
+#include <numbers>
+#include <sstream>
+
+#include <Inventor/SbLine.h>
+#include <Inventor/actions/SoRayPickAction.h>
+#include <Inventor/events/SoLocation2Event.h>
+#include <Inventor/events/SoMouseButtonEvent.h>
+#include <Inventor/nodes/SoBaseColor.h>
+#include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoClipPlane.h>
+#include <Inventor/nodes/SoCone.h>
+#include <Inventor/nodes/SoCoordinate3.h>
+#include <Inventor/nodes/SoCylinder.h>
+#include <Inventor/nodes/SoDrawStyle.h>
+#include <Inventor/nodes/SoEventCallback.h>
+#include <Inventor/nodes/SoFaceSet.h>
+#include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoIndexedFaceSet.h>
+#include <Inventor/nodes/SoLightModel.h>
+#include <Inventor/nodes/SoLineSet.h>
+#include <Inventor/nodes/SoMaterial.h>
+#include <Inventor/nodes/SoPickStyle.h>
+#include <Inventor/nodes/SoRotation.h>
+#include <Inventor/nodes/SoScale.h>
+#include <Inventor/nodes/SoSeparator.h>
+#include <Inventor/nodes/SoSwitch.h>
+#include <Inventor/nodes/SoTexture2.h>
+#include <Inventor/nodes/SoTextureCoordinate2.h>
+#include <Inventor/nodes/SoTransform.h>
+#include <Inventor/nodes/SoTranslation.h>
+
+#include <QButtonGroup>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDockWidget>
+#include <QEvent>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QTimer>
+#include <QToolButton>
+#include <QVBoxLayout>
+
+#include <App/Application.h>
+#include <App/Document.h>
+#include <App/DocumentObject.h>
+#include <Base/Interpreter.h>
+#include <Base/Tools.h>
+
+#include "SectionView.h"
+#include "Action.h"
+#include "Application.h"
+#include "BitmapFactory.h"
+#include "Command.h"
+#include "Document.h"
+#include "MainWindow.h"
+#include "QuantitySpinBox.h"
+#include "View3DInventor.h"
+#include "View3DInventorViewer.h"
+#include "Inventor/So3DAnnotation.h"
+
+using namespace Gui;
+
+namespace
+{
+
+constexpr const char* overlayButtonName = "SectionViewOverlayButton";
+
+struct Reference
+{
+    enum class Kind
+    {
+        None,
+        Point,
+        Plane,
+        Axis
+    };
+    Kind kind {Kind::None};
+    Base::Vector3d point;   // point on plane / axis, or the point itself
+    Base::Vector3d dir;     // plane normal or axis direction
+    Base::Vector3d center;  // center of the referenced element
+};
+
+// Geometry is evaluated with the Part module, which the core GUI cannot link to.
+// Placements of containers are applied by Part.getShape() because the sub-name
+// is resolved from the root object.
+const char* sectionScript = R"(
+import FreeCAD
+import Part
+
+def _vec(v):
+    return (v.x, v.y, v.z)
+
+def classify(obj, sub):
+    try:
+        s = Part.getShape(obj, sub, needSubElement=True)
+    except Exception:
+        return ('none',)
+    if s.isNull():
+        return ('none',)
+    if s.ShapeType not in ('Vertex', 'Edge', 'Face'):
+        if len(s.Faces) == 1:
+            s = s.Faces[0]
+        elif not s.Faces and len(s.Edges) == 1:
+            s = s.Edges[0]
+        else:
+            c = _vec(s.BoundBox.Center)
+            return ('point', c, (0, 0, 0), c)
+    if s.ShapeType == 'Vertex':
+        return ('point', _vec(s.Point), (0, 0, 0), _vec(s.Point))
+    com = _vec(s.CenterOfMass)
+    if s.ShapeType == 'Edge':
+        c = s.Curve
+        n = type(c).__name__
+        if n in ('Circle', 'Ellipse', 'ArcOfCircle', 'ArcOfEllipse'):
+            return ('axis', _vec(c.Center), _vec(c.Axis), _vec(c.Center))
+        if n in ('Line', 'LineSegment'):
+            return ('axis', _vec(s.Vertexes[0].Point), _vec(c.Direction), com)
+        return ('point', com, (0, 0, 0), com)
+    srf = s.Surface
+    n = type(srf).__name__
+    if n == 'Plane':
+        u0, u1, v0, v1 = s.ParameterRange
+        return ('plane', com, _vec(s.normalAt((u0 + u1) / 2, (v0 + v1) / 2)), com)
+    if n in ('Cylinder', 'Toroid', 'Sphere'):
+        return ('axis', _vec(srf.Center), _vec(srf.Axis), com)
+    if n == 'Cone':
+        return ('axis', _vec(srf.Apex), _vec(srf.Axis), com)
+    if n == 'SurfaceOfRevolution':
+        return ('axis', _vec(srf.Location), _vec(srf.Direction), com)
+    return ('point', com, (0, 0, 0), com)
+
+def _shown(gdoc, o):
+    vo = gdoc.getObject(o.Name)
+    if vo is None or not vo.Visibility:
+        return False
+    p = o.getParentGeoFeatureGroup()
+    while p is not None:
+        pv = gdoc.getObject(p.Name)
+        if pv is not None and not pv.Visibility:
+            return False
+        p = p.getParentGeoFeatureGroup()
+    return True
+
+def cap(docname, n, d, tol):
+    import FreeCADGui
+    doc = FreeCAD.getDocument(docname)
+    gdoc = FreeCADGui.getDocument(docname)
+    nv = FreeCAD.Vector(*n)
+    pts = []
+    tris = []
+    for o in doc.Objects:
+        if o.isDerivedFrom('PartDesign::Body') or o.isDerivedFrom('App::Part'):
+            continue
+        if not (o.isDerivedFrom('Part::Feature') or o.isDerivedFrom('App::Link')):
+            continue
+        if not _shown(gdoc, o):
+            continue
+        try:
+            s = Part.getShape(o, '', needSubElement=False, transform=False)
+            if s.isNull() or not s.Solids:
+                continue
+            s = s.copy()
+            s.Placement = o.getGlobalPlacement().multiply(s.Placement)
+        except Exception:
+            continue
+        for sol in s.Solids:
+            try:
+                ws = sol.slice(nv, d)
+                if not ws:
+                    continue
+                f = Part.makeFace(ws, 'Part::FaceMakerBullseye')
+                vs, ts = f.tessellate(tol)
+            except Exception:
+                continue
+            base = len(pts)
+            pts.extend(_vec(v) for v in vs)
+            tris.extend((a + base, b + base, c + base) for a, b, c in ts)
+    return (pts, tris)
+)";
+
+PyObject* sectionModule()
+{
+    static PyObject* dict = nullptr;
+    if (!dict) {
+        dict = PyDict_New();
+        PyDict_SetItemString(dict, "__builtins__", PyEval_GetBuiltins());
+        PyObject* res = PyRun_String(sectionScript, Py_file_input, dict, dict);
+        if (!res) {
+            Py_DECREF(dict);
+            dict = nullptr;
+            throw Py::Exception();
+        }
+        Py_DECREF(res);
+    }
+    return dict;
+}
+
+Base::Vector3d toVector(const Py::Object& obj)
+{
+    Py::Sequence t(obj);
+    return Base::Vector3d(
+        static_cast<double>(Py::Float(t[0])),
+        static_cast<double>(Py::Float(t[1])),
+        static_cast<double>(Py::Float(t[2]))
+    );
+}
+
+Reference classifyReference(App::DocumentObject* obj, const char* sub)
+{
+    Reference ref;
+    Base::PyGILStateLocker lock;
+    try {
+        Py::Dict module(sectionModule());
+        Py::Callable fn(module.getItem("classify"));
+        Py::Tuple args(2);
+        args.setItem(0, Py::asObject(obj->getPyObject()));
+        args.setItem(1, Py::String(sub ? sub : ""));
+        Py::Tuple result(fn.apply(args));
+
+        std::string kind = Py::String(result[0]).as_std_string();
+        if (kind == "none") {
+            return ref;
+        }
+        ref.point = toVector(result[1]);
+        ref.dir = toVector(result[2]);
+        ref.center = toVector(result[3]);
+        if (kind == "plane") {
+            ref.kind = Reference::Kind::Plane;
+        }
+        else if (kind == "axis") {
+            ref.kind = Reference::Kind::Axis;
+        }
+        else {
+            ref.kind = Reference::Kind::Point;
+        }
+        if (ref.kind != Reference::Kind::Point) {
+            if (ref.dir.Length() < 1e-12) {
+                ref.kind = Reference::Kind::Point;
+            }
+            else {
+                ref.dir.Normalize();
+            }
+        }
+    }
+    catch (Py::Exception&) {
+        Base::PyException e;
+        e.reportException();
+    }
+    return ref;
+}
+
+SbVec3f toSb(const Base::Vector3d& v)
+{
+    return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
+}
+
+Base::Vector3d toBase(const SbVec3f& v)
+{
+    return Base::Vector3d(v[0], v[1], v[2]);
+}
+
+// Any unit vector perpendicular to dir.
+Base::Vector3d perpendicular(const Base::Vector3d& dir)
+{
+    Base::Vector3d other(1, 0, 0);
+    if (std::fabs(dir.x) > std::fabs(dir.y) && std::fabs(dir.x) > std::fabs(dir.z)) {
+        other = Base::Vector3d(0, 1, 0);
+    }
+    Base::Vector3d p = dir % other;
+    p.Normalize();
+    return p;
+}
+
+// Component of v perpendicular to unit vector dir, normalized, or a null vector.
+Base::Vector3d rejectFrom(const Base::Vector3d& v, const Base::Vector3d& dir)
+{
+    Base::Vector3d r = v - dir * (v * dir);
+    if (r.Length() < 1e-9) {
+        return Base::Vector3d(0, 0, 0);
+    }
+    r.Normalize();
+    return r;
+}
+
+SbBox3f modelBox(View3DInventorViewer* viewer, SoNode* exclude)
+{
+    // exclude the section helpers from the bounding box
+    SoGroup* graph = static_cast<SoGroup*>(viewer->getSceneGraph());
+    int index = graph->findChild(exclude);
+    if (index >= 0) {
+        exclude->ref();
+        graph->removeChild(index);
+    }
+    SbBox3f box = viewer->getBoundingBox();
+    if (index >= 0) {
+        graph->insertChild(exclude, index);
+        exclude->unref();
+    }
+    return box;
+}
+
+}  // namespace
+
+/* TRANSLATOR Gui::SectionView */
+
+SectionView::SectionView(View3DInventor* view)
+    : QObject(view)
+    , SelectionObserver(false, ResolveMode::NoResolve)
+    , view(view)
+{
+    setObjectName(QStringLiteral("SectionView"));
+    buildSceneNodes();
+    buildPanel();
+
+    capTimer = new QTimer(this);
+    capTimer->setSingleShot(true);
+    capTimer->setInterval(120);
+    connect(capTimer, &QTimer::timeout, this, &SectionView::updateCap);
+
+    // clang-format off
+    activateViewConnection = Application::Instance->signalActivateView.connect(
+        [this](const MDIView* mdi) { onActivateView(mdi); });
+    recomputedConnection = App::GetApplication().signalRecomputed.connect(
+        [this](const App::Document&) {
+            if (enabled) {
+                capTimer->start();
+            }
+        });
+    // clang-format on
+}
+
+SectionView::~SectionView()
+{
+    activateViewConnection.disconnect();
+    recomputedConnection.disconnect();
+    detachSelection();
+    if (root) {
+        root->removeChild(overlay);
+        root->removeChild(clip);
+        root->unref();
+        root = nullptr;
+    }
+    clip->unref();
+    overlay->unref();
+    delete dock.data();
+}
+
+SectionView* SectionView::of(View3DInventor* view, bool create)
+{
+    if (!view) {
+        return nullptr;
+    }
+    auto section = view->findChild<SectionView*>(QString(), Qt::FindDirectChildrenOnly);
+    if (!section && create) {
+        section = new SectionView(view);
+    }
+    return section;
+}
+
+void SectionView::toggle(View3DInventor* view, bool on)
+{
+    if (auto section = of(view, on)) {
+        section->setEnabled(on);
+    }
+    else if (view) {
+        // nothing to turn off, just make sure that the states are right
+        if (auto button = view->getViewer()->getWidget()->findChild<QToolButton*>(
+                QLatin1String(overlayButtonName)
+            )) {
+            button->setChecked(false);
+        }
+    }
+}
+
+namespace
+{
+class OverlayPlacer: public QObject
+{
+public:
+    OverlayPlacer(QWidget* host, QToolButton* button)
+        : QObject(button)
+        , host(host)
+        , button(button)
+    {
+        host->installEventFilter(this);
+        place();
+    }
+    bool eventFilter(QObject* obj, QEvent* event) override
+    {
+        if (obj == host && event->type() == QEvent::Resize) {
+            place();
+        }
+        return false;
+    }
+    void place()
+    {
+        button->adjustSize();
+        button->move((host->width() - button->width()) / 2, 6);
+        button->raise();
+    }
+
+private:
+    QWidget* host;
+    QToolButton* button;
+};
+}  // namespace
+
+void SectionView::installOverlayButton(View3DInventor* view)
+{
+    QWidget* host = view->getViewer()->getWidget();
+    if (!host) {
+        return;
+    }
+    auto button = new QToolButton(host);
+    button->setObjectName(QLatin1String(overlayButtonName));
+    button->setCheckable(true);
+    button->setAutoRaise(true);
+    button->setIcon(BitmapFactory().iconFromTheme("Std_SectionView"));
+    button->setIconSize(QSize(20, 20));
+    button->setToolTip(tr("Section view: cut the model with a movable plane"));
+    button->setCursor(Qt::ArrowCursor);
+    button->setStyleSheet(
+        QStringLiteral(
+            "QToolButton { background: rgba(255, 255, 255, 140); border: 1px solid "
+            "rgba(0, 0, 0, 60); border-radius: 4px; padding: 2px; }"
+            "QToolButton:checked { background: rgba(255, 170, 80, 200); }"
+        )
+    );
+    new OverlayPlacer(host, button);
+    button->show();
+
+    QPointer<View3DInventor> guard(view);
+    connect(button, &QToolButton::clicked, button, [guard](bool checked) {
+        if (!guard) {
+            return;
+        }
+        getMainWindow()->setActiveWindow(guard);
+        toggle(guard, checked);
+    });
+}
+
+void SectionView::buildSceneNodes()
+{
+    clip = new SoClipPlane();
+    clip->ref();
+
+    overlay = new SoSeparator();
+    overlay->ref();
+
+    auto events = new SoEventCallback();
+    events->addEventCallback(SoMouseButtonEvent::getClassTypeId(), &SectionView::eventCB, this);
+    events->addEventCallback(SoLocation2Event::getClassTypeId(), &SectionView::eventCB, this);
+    overlay->addChild(events);
+
+    // Hatched cap on the cut area
+    capSwitch = new SoSwitch();
+    capSwitch->whichChild = SO_SWITCH_ALL;
+    auto capSep = new SoSeparator();
+    auto capPick = new SoPickStyle();
+    capPick->style = SoPickStyle::UNPICKABLE;
+    capSep->addChild(capPick);
+    auto capLight = new SoLightModel();
+    capLight->model = SoLightModel::BASE_COLOR;
+    capSep->addChild(capLight);
+    auto capColor = new SoBaseColor();
+    capColor->rgb.setValue(1.0F, 1.0F, 1.0F);
+    capSep->addChild(capColor);
+    auto texture = new SoTexture2();
+    constexpr int texSize = 32;
+    std::vector<unsigned char> image(texSize * texSize * 3);
+    for (int y = 0; y < texSize; ++y) {
+        for (int x = 0; x < texSize; ++x) {
+            bool line = ((x + y) % texSize) < 4;
+            unsigned char* px = &image[(y * texSize + x) * 3];
+            px[0] = line ? 90 : 225;
+            px[1] = line ? 60 : 215;
+            px[2] = line ? 40 : 200;
+        }
+    }
+    texture->image.setValue(SbVec2s(texSize, texSize), 3, image.data());
+    texture->model = SoTexture2::REPLACE;
+    texture->wrapS = SoTexture2::REPEAT;
+    texture->wrapT = SoTexture2::REPEAT;
+    capSep->addChild(texture);
+    capTexCoords = new SoTextureCoordinate2();
+    capSep->addChild(capTexCoords);
+    capCoords = new SoCoordinate3();
+    capSep->addChild(capCoords);
+    capFaces = new SoIndexedFaceSet();
+    capSep->addChild(capFaces);
+    capSwitch->addChild(capSep);
+    overlay->addChild(capSwitch);
+
+    arrowSwitch = new SoSwitch();
+    arrowSwitch->whichChild = SO_SWITCH_ALL;
+    overlay->addChild(arrowSwitch);
+
+    arrowXform = new SoTransform();
+
+    // Translucent square showing the plane
+    auto planeSep = new SoSeparator();
+    planeSep->addChild(arrowXform);
+    auto pick = new SoPickStyle();
+    pick->style = SoPickStyle::UNPICKABLE;
+    planeSep->addChild(pick);
+    auto light = new SoLightModel();
+    light->model = SoLightModel::BASE_COLOR;
+    planeSep->addChild(light);
+    auto mat = new SoMaterial();
+    mat->diffuseColor.setValue(0.9F, 0.4F, 0.1F);
+    mat->transparency = 0.85F;
+    planeSep->addChild(mat);
+    planeCoords = new SoCoordinate3();
+    planeSep->addChild(planeCoords);
+    auto face = new SoFaceSet();
+    face->numVertices.setValue(4);
+    planeSep->addChild(face);
+    auto lineMat = new SoMaterial();
+    lineMat->diffuseColor.setValue(0.9F, 0.4F, 0.1F);
+    lineMat->transparency = 0.3F;
+    planeSep->addChild(lineMat);
+    auto style = new SoDrawStyle();
+    style->lineWidth = 1.5F;
+    planeSep->addChild(style);
+    auto lines = new SoLineSet();
+    lines->numVertices.setValue(5);
+    planeSep->addChild(lines);
+    arrowSwitch->addChild(planeSep);
+
+    // Double arrow along the normal, drawn on top of everything
+    auto annotation = new So3DAnnotation();
+    arrowRoot = new SoSeparator();
+    arrowRoot->addChild(arrowXform);
+    arrowScale = new SoScale();
+    arrowRoot->addChild(arrowScale);
+    auto arrowLight = new SoLightModel();
+    arrowLight->model = SoLightModel::PHONG;
+    arrowRoot->addChild(arrowLight);
+    arrowMaterial = new SoMaterial();
+    arrowMaterial->diffuseColor.setValue(0.95F, 0.45F, 0.1F);
+    arrowMaterial->transparency = 0.55F;
+    arrowRoot->addChild(arrowMaterial);
+    auto shaft = new SoCylinder();
+    shaft->radius = 0.035F;
+    shaft->height = 1.4F;
+    arrowRoot->addChild(shaft);
+    auto upSep = new SoSeparator();
+    auto upMove = new SoTranslation();
+    upMove->translation.setValue(0.0F, 0.85F, 0.0F);
+    upSep->addChild(upMove);
+    auto upCone = new SoCone();
+    upCone->bottomRadius = 0.1F;
+    upCone->height = 0.3F;
+    upSep->addChild(upCone);
+    arrowRoot->addChild(upSep);
+    auto downSep = new SoSeparator();
+    auto downMove = new SoTranslation();
+    downMove->translation.setValue(0.0F, -0.85F, 0.0F);
+    downSep->addChild(downMove);
+    auto downRot = new SoRotation();
+    downRot->rotation.setValue(SbVec3f(1, 0, 0), std::numbers::pi_v<float>);
+    downSep->addChild(downRot);
+    downSep->addChild(upCone);
+    arrowRoot->addChild(downSep);
+    annotation->addChild(arrowRoot);
+    arrowSwitch->addChild(annotation);
+}
+
+void SectionView::buildPanel()
+{
+    auto panel = new QWidget();
+    auto layout = new QVBoxLayout(panel);
+
+    auto planeBox = new QGroupBox(tr("Plane"), panel);
+    auto planeLayout = new QGridLayout(planeBox);
+    sourceGroup = new QButtonGroup(this);
+    sourceGroup->setExclusive(true);
+    auto addSource = [&](const QString& text, const QString& tip, Source src, int row, int col, int span) {
+        auto button = new QToolButton(planeBox);
+        button->setText(text);
+        button->setToolTip(tip);
+        button->setCheckable(true);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        sourceGroup->addButton(button, static_cast<int>(src));
+        planeLayout->addWidget(button, row, col, 1, span);
+    };
+    addSource(tr("XY"), tr("Section with a plane parallel to XY"), Source::XY, 0, 0, 1);
+    addSource(tr("XZ"), tr("Section with a plane parallel to XZ"), Source::XZ, 0, 1, 1);
+    addSource(tr("YZ"), tr("Section with a plane parallel to YZ"), Source::YZ, 0, 2, 1);
+    addSource(
+        tr("View"),
+        tr("Section with a plane parallel to the screen, through the center of the view"),
+        Source::View,
+        1,
+        0,
+        1
+    );
+    addSource(
+        tr("Pick…"),
+        tr("Pick faces, edges or vertices in the 3D view to define the plane"),
+        Source::Selection,
+        1,
+        1,
+        2
+    );
+
+    reverseBox = new QCheckBox(tr("Reverse side"), planeBox);
+    reverseBox->setToolTip(tr("Keep the other side of the plane"));
+    planeLayout->addWidget(reverseBox, 2, 0, 1, 3);
+    layout->addWidget(planeBox);
+
+    // Interactive picking
+    pickWidget = new QGroupBox(tr("Pick references"), panel);
+    auto pickLayout = new QGridLayout(pickWidget);
+    pickLabel = new QLabel(pickWidget);
+    pickLabel->setWordWrap(true);
+    pickLayout->addWidget(pickLabel, 0, 0, 1, 2);
+    auto rules = new QLabel(
+        tr("• one planar face: plane of the face\n"
+           "• two parallel faces: plane midway between them\n"
+           "• face + vertex or edge: parallel to the face, through the second reference\n"
+           "• circular edge, round face or straight edge: plane from its axis\n"
+           "• two vertices: perpendicular to the segment, through its midpoint\n"
+           "• three vertices: plane through them"),
+        pickWidget
+    );
+    rules->setWordWrap(true);
+    pickLayout->addWidget(rules, 1, 0, 1, 2);
+    auto doneButton = new QPushButton(tr("Done"), pickWidget);
+    auto cancelButton = new QPushButton(tr("Cancel"), pickWidget);
+    pickLayout->addWidget(doneButton, 2, 0);
+    pickLayout->addWidget(cancelButton, 2, 1);
+    layout->addWidget(pickWidget);
+
+    // Options for axial references (circles, cylinders, straight edges, ...)
+    axisWidget = new QGroupBox(tr("Axis"), panel);
+    auto axisLayout = new QGridLayout(axisWidget);
+    axisMode = new QComboBox(axisWidget);
+    axisMode->addItem(tr("Perpendicular to axis"));
+    axisMode->addItem(tr("Containing the axis"));
+    axisMode->setToolTip(tr("Plane perpendicular to the axis through its center, or plane "
+                            "containing the axis"));
+    axisLayout->addWidget(axisMode, 0, 0, 1, 2);
+    axisLabel = new QLabel(axisWidget);
+    axisLabel->setWordWrap(true);
+    axisLayout->addWidget(axisLabel, 1, 0, 1, 2);
+    axisLayout->addWidget(new QLabel(tr("Angle"), axisWidget), 2, 0);
+    angleSpin = new QuantitySpinBox(axisWidget);
+    angleSpin->setUnit(Base::Unit::Angle);
+    angleSpin->setRange(-360.0, 360.0);
+    angleSpin->setSingleStep(5.0);
+    angleSpin->setToolTip(tr("Rotation of the plane around the axis"));
+    axisLayout->addWidget(angleSpin, 2, 1);
+    layout->addWidget(axisWidget);
+
+    auto offsetLayout = new QGridLayout();
+    offsetLayout->addWidget(new QLabel(tr("Offset"), panel), 0, 0);
+    offsetSpin = new QuantitySpinBox(panel);
+    offsetSpin->setUnit(Base::Unit::Length);
+    offsetSpin->setRange(-std::numeric_limits<int>::max(), std::numeric_limits<int>::max());
+    offsetSpin->setToolTip(tr("Distance of the plane from its reference along the normal"));
+    offsetLayout->addWidget(offsetSpin, 0, 1);
+    arrowBox = new QCheckBox(tr("Show arrow and plane"), panel);
+    arrowBox->setChecked(true);
+    arrowBox->setToolTip(tr("Show the arrow to drag the plane and the plane outline"));
+    offsetLayout->addWidget(arrowBox, 1, 0, 1, 2);
+    capBox = new QCheckBox(tr("Show hatched cut faces"), panel);
+    capBox->setChecked(true);
+    capBox->setToolTip(tr("Fill the cut area of visible solids with a hatch pattern"));
+    offsetLayout->addWidget(capBox, 2, 0, 1, 2);
+    layout->addLayout(offsetLayout);
+
+    infoLabel = new QLabel(panel);
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    auto sketchButton = new QPushButton(tr("Create Sketch on Plane"), panel);
+    sketchButton->setToolTip(
+        tr("Create a sketch on the current section plane, in the active body if there is one")
+    );
+    layout->addWidget(sketchButton);
+    auto closeButton = new QPushButton(tr("Turn Off Section"), panel);
+    layout->addWidget(closeButton);
+    layout->addStretch();
+
+    dock = new QDockWidget(tr("Section View"), getMainWindow());
+    dock->setObjectName(QStringLiteral("Std_SectionView"));
+    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    dock->setWidget(panel);
+    getMainWindow()->addDockWidget(Qt::RightDockWidgetArea, dock);
+    dock->hide();
+
+    // clang-format off
+    connect(sourceGroup, &QButtonGroup::idClicked, this, [this](int id) {
+        setSource(static_cast<Source>(id));
+    });
+    connect(reverseBox, &QCheckBox::toggled, this, [this](bool on) {
+        reversed = on;
+        updatePlane();
+    });
+    connect(doneButton, &QPushButton::clicked, this, [this]() { finishPicking(true); });
+    connect(cancelButton, &QPushButton::clicked, this, [this]() { finishPicking(false); });
+    connect(axisMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        st.containsAxis = index == 1;
+        updateAxisWidgets();
+        updatePlane();
+    });
+    connect(angleSpin, qOverload<double>(&QuantitySpinBox::valueChanged), this, [this](double value) {
+        st.angle = value;
+        updatePlane();
+    });
+    connect(offsetSpin, qOverload<double>(&QuantitySpinBox::valueChanged), this, [this](double value) {
+        st.offset = value;
+        updatePlane();
+    });
+    connect(arrowBox, &QCheckBox::toggled, this, [this](bool on) {
+        arrowSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+    });
+    connect(capBox, &QCheckBox::toggled, this, [this](bool on) {
+        capSwitch->whichChild = on ? SO_SWITCH_ALL : SO_SWITCH_NONE;
+        if (on) {
+            updateCap();
+        }
+    });
+    connect(sketchButton, &QPushButton::clicked, this, &SectionView::createSketch);
+    connect(closeButton, &QPushButton::clicked, this, [this]() {
+        toggle(view, false);
+    });
+    // clang-format on
+
+    pickWidget->hide();
+    updateAxisWidgets();
+}
+
+void SectionView::setEnabled(bool on)
+{
+    if (on != enabled && view && dock) {
+        View3DInventorViewer* viewer = view->getViewer();
+        if (on) {
+            root = static_cast<SoGroup*>(viewer->getSceneGraph());
+            root->ref();
+            int index = -1;
+            if (auto editingRoot = viewer->getEditingRoot()) {
+                index = root->findChild(editingRoot);
+            }
+            // the helpers go before the clip plane so they are not clipped
+            root->insertChild(clip, index + 1);
+            root->insertChild(overlay, index + 1);
+            enabled = true;
+            if (!initialized) {
+                sourceGroup->button(static_cast<int>(Source::XY))->setChecked(true);
+                setSource(Source::XY);
+            }
+            else {
+                updateArrowSize();
+                updatePlane();
+            }
+            dock->show();
+            dock->raise();
+        }
+        else {
+            if (picking) {
+                finishPicking(false);
+            }
+            capTimer->stop();
+            dragging = false;
+            root->removeChild(overlay);
+            root->removeChild(clip);
+            root->unref();
+            root = nullptr;
+            enabled = false;
+            dock->hide();
+        }
+    }
+    updateToggleStates();
+}
+
+void SectionView::updateToggleStates()
+{
+    if (!view) {
+        return;
+    }
+    if (auto button = view->getViewer()->getWidget()->findChild<QToolButton*>(
+            QLatin1String(overlayButtonName)
+        )) {
+        button->setChecked(enabled);
+    }
+    if (getMainWindow()->activeWindow() == view) {
+        Command* cmd = Application::Instance->commandManager().getCommandByName("Std_SectionView");
+        if (cmd && cmd->getAction()) {
+            cmd->getAction()->setBlockedChecked(enabled);
+        }
+    }
+}
+
+void SectionView::onActivateView(const QWidget* activated)
+{
+    if (!enabled || !dock) {
+        return;
+    }
+    dock->setVisible(activated == view);
+}
+
+void SectionView::setSource(Source src)
+{
+    if (!view) {
+        return;
+    }
+    if (src == Source::Selection) {
+        startPicking();
+        return;
+    }
+    if (picking) {
+        finishPicking(false);
+    }
+    View3DInventorViewer* viewer = view->getViewer();
+    st.source = src;
+    st.axial = false;
+    st.hasSecondRef = false;
+    switch (src) {
+        case Source::XY:
+            st.normal = Base::Vector3d(0, 0, 1);
+            break;
+        case Source::XZ:
+            st.normal = Base::Vector3d(0, 1, 0);
+            break;
+        case Source::YZ:
+            st.normal = Base::Vector3d(1, 0, 0);
+            break;
+        default:
+            break;
+    }
+    if (src == Source::View) {
+        SbVec3f dir = viewer->getViewDirection();
+        dir.normalize();
+        st.normal = toBase(dir);
+        if (SoCamera* cam = viewer->getSoRenderManager()->getCamera()) {
+            st.basePoint = toBase(cam->position.getValue() + dir * cam->focalDistance.getValue());
+        }
+        st.offset = 0.0;
+        infoLabel->setText(tr("Plane parallel to the screen"));
+    }
+    else {
+        // the offset is measured from the global origin, the base point is
+        // kept near the model so that the arrow is visible
+        SbBox3f box = modelBox(viewer, overlay);
+        Base::Vector3d center(0, 0, 0);
+        if (!box.isEmpty()) {
+            center = toBase(box.getCenter());
+        }
+        st.offset = center * st.normal;
+        st.basePoint = center - st.normal * st.offset;
+        infoLabel->setText(tr("Offset is measured from the global origin"));
+    }
+    initialized = true;
+    applyState();
+}
+
+void SectionView::applyState()
+{
+    axisMode->blockSignals(true);
+    axisMode->setCurrentIndex(st.containsAxis ? 1 : 0);
+    axisMode->blockSignals(false);
+    angleSpin->blockSignals(true);
+    angleSpin->setValue(st.angle);
+    angleSpin->blockSignals(false);
+    if (auto button = sourceGroup->button(static_cast<int>(st.source))) {
+        button->setChecked(true);
+    }
+    updateAxisWidgets();
+    updateStepFromModel();
+    updateArrowSize();
+    updateOffsetSpin();
+    updatePlane();
+}
+
+void SectionView::startPicking()
+{
+    if (!picking) {
+        savedState = st;
+        picking = true;
+        attachSelection();
+    }
+    sourceGroup->button(static_cast<int>(Source::Selection))->setChecked(true);
+    pickWidget->show();
+    // use a selection made before pressing the button
+    if (!planeFromSelection()) {
+        pickLabel->setText(tr("Select a face, an edge or vertices in the 3D view…"));
+    }
+}
+
+void SectionView::finishPicking(bool accept)
+{
+    if (!picking) {
+        return;
+    }
+    picking = false;
+    detachSelection();
+    pickWidget->hide();
+    if (!accept || st.source != Source::Selection) {
+        st = savedState;
+        initialized = true;
+    }
+    applyState();
+}
+
+void SectionView::onSelectionChanged(const SelectionChanges& msg)
+{
+    if (!picking) {
+        return;
+    }
+    if (msg.Type == SelectionChanges::AddSelection || msg.Type == SelectionChanges::RmvSelection
+        || msg.Type == SelectionChanges::ClrSelection || msg.Type == SelectionChanges::SetSelection) {
+        if (!planeFromSelection()) {
+            // keep the current plane until the selection defines a new one
+            pickLabel->setText(tr("Select a face, an edge or vertices in the 3D view…"));
+        }
+    }
+}
+
+bool SectionView::planeFromSelection()
+{
+    std::vector<Reference> refs;
+    for (const auto& sel : Selection().getCompleteSelection(ResolveMode::NoResolve)) {
+        if (!sel.pObject) {
+            continue;
+        }
+        Reference ref = classifyReference(sel.pObject, sel.SubName);
+        if (ref.kind != Reference::Kind::None) {
+            refs.push_back(ref);
+        }
+    }
+    if (refs.empty()) {
+        return false;
+    }
+
+    std::vector<const Reference*> planes;
+    std::vector<const Reference*> axes;
+    std::vector<const Reference*> points;
+    for (const auto& ref : refs) {
+        switch (ref.kind) {
+            case Reference::Kind::Plane:
+                planes.push_back(&ref);
+                break;
+            case Reference::Kind::Axis:
+                axes.push_back(&ref);
+                break;
+            default:
+                points.push_back(&ref);
+                break;
+        }
+    }
+
+    PlaneState s = st;
+    s.source = Source::Selection;
+    s.offset = 0.0;
+    s.axial = false;
+    s.hasSecondRef = false;
+    QString message;
+
+    auto otherThan = [&](const Reference* exclude) -> const Reference* {
+        for (const auto& ref : refs) {
+            if (&ref != exclude) {
+                return &ref;
+            }
+        }
+        return nullptr;
+    };
+
+    if (!planes.empty()) {
+        const Reference* face = planes.front();
+        // the normal points into the material, so that at offset zero the face
+        // is on the plane and a positive offset cuts into the solid
+        s.normal = -face->dir;
+        s.basePoint = face->point;
+        message = tr("Plane of the selected face");
+        if (planes.size() >= 2 && std::fabs(planes[0]->dir * planes[1]->dir) > 0.9999) {
+            Base::Vector3d mid = (planes[0]->point + planes[1]->point) / 2.0;
+            s.basePoint = mid;
+            message = tr("Plane midway between the two parallel faces");
+        }
+        else if (const Reference* other = otherThan(face)) {
+            s.basePoint = other->center;
+            message = tr("Plane parallel to the face, through the second reference");
+        }
+    }
+    else if (!axes.empty()) {
+        const Reference* axis = axes.front();
+        s.axial = true;
+        s.axisDir = axis->dir;
+        // put the base point on the axis, at the height of the element center
+        s.axisPoint = axis->point + s.axisDir * ((axis->center - axis->point) * s.axisDir);
+
+        Base::Vector3d inPlane(0, 0, 0);
+        if (const Reference* other = otherThan(axis)) {
+            inPlane = rejectFrom(other->center - s.axisPoint, s.axisDir);
+            if (inPlane.Length() < 0.5 && other->kind != Reference::Kind::Point) {
+                inPlane = rejectFrom(other->dir, s.axisDir);
+            }
+        }
+        if (inPlane.Length() > 0.5) {
+            s.hasSecondRef = true;
+            s.containsAxis = true;
+            s.angle = 0.0;
+            message = tr("Plane containing the axis and the second reference");
+        }
+        else {
+            // plane containing the axis that faces the viewer as much as possible
+            Base::Vector3d viewDir = toBase(view->getViewer()->getViewDirection());
+            Base::Vector3d n = rejectFrom(viewDir, s.axisDir);
+            inPlane = n.Length() > 0.5 ? n % s.axisDir : perpendicular(s.axisDir);
+            inPlane.Normalize();
+            message = tr("Plane from the axis of the selected reference");
+        }
+        s.axisRef = inPlane;
+    }
+    else if (points.size() >= 3) {
+        Base::Vector3d p0 = points[0]->point;
+        Base::Vector3d n = (points[1]->point - p0) % (points[2]->point - p0);
+        if (n.Length() < 1e-9) {
+            return false;
+        }
+        n.Normalize();
+        s.normal = n;
+        s.basePoint = p0;
+        message = tr("Plane through three points");
+    }
+    else if (points.size() == 2) {
+        Base::Vector3d d = points[1]->point - points[0]->point;
+        if (d.Length() < 1e-9) {
+            return false;
+        }
+        d.Normalize();
+        s.normal = d;
+        s.basePoint = (points[0]->point + points[1]->point) / 2.0;
+        message = tr("Plane perpendicular to the segment, through its midpoint");
+    }
+    else {
+        pickLabel->setText(tr("One vertex is not enough: select another vertex or a face…"));
+        return false;
+    }
+
+    st = s;
+    initialized = true;
+    infoLabel->setText(message);
+    pickLabel->setText(
+        st.axial && !st.hasSecondRef
+            ? tr("Axis found. To fix the rotation of a plane containing the axis, select a "
+                 "second reference or type the angle below. Press Done to finish.")
+            : tr("%1. Add references or press Done to finish.").arg(message)
+    );
+    applyState();
+    return true;
+}
+
+void SectionView::updateAxisWidgets()
+{
+    axisWidget->setVisible(st.axial);
+    angleSpin->setEnabled(st.containsAxis);
+    if (!st.containsAxis) {
+        axisLabel->setText(tr("The plane is perpendicular to the axis, through its center."));
+    }
+    else if (st.hasSecondRef) {
+        axisLabel->setText(
+            tr("The plane contains the axis and passes through the second reference; "
+               "the angle rotates it around the axis.")
+        );
+    }
+    else {
+        axisLabel->setText(
+            tr("Select a second reference to fix the rotation around the axis, or type the "
+               "angle.")
+        );
+    }
+}
+
+void SectionView::updateStepFromModel()
+{
+    SbBox3f box = modelBox(view->getViewer(), overlay);
+    modelSize = box.isEmpty() ? 10.0 : (box.getMax() - box.getMin()).length();
+    modelSize = std::max(modelSize, 1e-3);
+    double step = std::pow(10.0, std::floor(std::log10(modelSize / 100.0)));
+    offsetSpin->setSingleStep(step);
+}
+
+void SectionView::updateArrowSize()
+{
+    auto scale = static_cast<float>(modelSize * 0.12);
+    arrowScale->scaleFactor.setValue(scale, scale, scale);
+
+    auto h = static_cast<float>(modelSize * 0.6);
+    planeCoords->point.setNum(5);
+    planeCoords->point.set1Value(0, -h, 0, -h);
+    planeCoords->point.set1Value(1, h, 0, -h);
+    planeCoords->point.set1Value(2, h, 0, h);
+    planeCoords->point.set1Value(3, -h, 0, h);
+    planeCoords->point.set1Value(4, -h, 0, -h);
+}
+
+Base::Vector3d SectionView::planePoint() const
+{
+    return st.basePoint + st.normal * st.offset;
+}
+
+Base::Vector3d SectionView::clipNormal() const
+{
+    return reversed ? -st.normal : st.normal;
+}
+
+void SectionView::updatePlane()
+{
+    if (st.axial) {
+        if (st.containsAxis) {
+            double rad = Base::toRadians(st.angle);
+            Base::Vector3d dir = st.axisRef * std::cos(rad)
+                + (st.axisDir % st.axisRef) * std::sin(rad);
+            st.normal = st.axisDir % dir;
+            st.normal.Normalize();
+        }
+        else {
+            st.normal = st.axisDir;
+        }
+        st.basePoint = st.axisPoint;
+    }
+
+    clip->plane.setValue(SbPlane(toSb(clipNormal()), toSb(planePoint())));
+    clip->on = true;
+
+    arrowXform->translation.setValue(toSb(planePoint()));
+    arrowXform->rotation.setValue(SbRotation(SbVec3f(0, 1, 0), toSb(st.normal)));
+
+    if (enabled) {
+        capTimer->start();
+    }
+}
+
+void SectionView::updateOffsetSpin()
+{
+    offsetSpin->blockSignals(true);
+    offsetSpin->setValue(st.offset);
+    offsetSpin->blockSignals(false);
+}
+
+void SectionView::updateCap()
+{
+    if (!enabled || !view || capSwitch->whichChild.getValue() == SO_SWITCH_NONE) {
+        return;
+    }
+    App::Document* doc = view->getGuiDocument() ? view->getGuiDocument()->getDocument() : nullptr;
+    if (!doc) {
+        return;
+    }
+    Base::Vector3d n = clipNormal();
+    double d = n * planePoint();
+
+    std::vector<SbVec3f> pts;
+    std::vector<int32_t> index;
+    {
+        Base::PyGILStateLocker lock;
+        try {
+            Py::Dict module(sectionModule());
+            Py::Callable fn(module.getItem("cap"));
+            Py::Tuple args(4);
+            args.setItem(0, Py::String(doc->getName()));
+            Py::Tuple nt(3);
+            nt.setItem(0, Py::Float(n.x));
+            nt.setItem(1, Py::Float(n.y));
+            nt.setItem(2, Py::Float(n.z));
+            args.setItem(1, nt);
+            args.setItem(2, Py::Float(d));
+            args.setItem(3, Py::Float(modelSize / 400.0));
+            Py::Tuple result(fn.apply(args));
+            Py::List plist(result[0]);
+            Py::List tlist(result[1]);
+            pts.reserve(plist.size());
+            for (const auto& p : plist) {
+                pts.push_back(toSb(toVector(p)));
+            }
+            index.reserve(tlist.size() * 4);
+            for (const auto& t : tlist) {
+                Py::Sequence tri(t);
+                for (int i = 0; i < 3; ++i) {
+                    index.push_back(static_cast<int32_t>(static_cast<long>(Py::Long(tri[i]))));
+                }
+                index.push_back(-1);
+            }
+        }
+        catch (Py::Exception&) {
+            Base::PyException e;
+            e.reportException();
+            return;
+        }
+    }
+
+    // hatch coordinates in the plane
+    Base::Vector3d u = perpendicular(n);
+    Base::Vector3d v = n % u;
+    double spacing = modelSize / 60.0;
+    std::vector<SbVec2f> tex;
+    tex.reserve(pts.size());
+    for (const auto& p : pts) {
+        Base::Vector3d bp = toBase(p);
+        tex.emplace_back(static_cast<float>(bp * u / spacing), static_cast<float>(bp * v / spacing));
+    }
+
+    capCoords->point.setNum(static_cast<int>(pts.size()));
+    capCoords->point.setValues(0, static_cast<int>(pts.size()), pts.data());
+    capTexCoords->point.setNum(static_cast<int>(tex.size()));
+    capTexCoords->point.setValues(0, static_cast<int>(tex.size()), tex.data());
+    capFaces->coordIndex.setNum(static_cast<int>(index.size()));
+    capFaces->coordIndex.setValues(0, static_cast<int>(index.size()), index.data());
+}
+
+void SectionView::setArrowHighlight(bool on)
+{
+    if (on == highlighted) {
+        return;
+    }
+    highlighted = on;
+    arrowMaterial->transparency = on ? 0.0F : 0.55F;
+}
+
+void SectionView::eventCB(void* data, SoEventCallback* cb)
+{
+    auto self = static_cast<SectionView*>(data);
+    if (!self->enabled || !self->view || self->arrowSwitch->whichChild.getValue() == SO_SWITCH_NONE) {
+        return;
+    }
+    const SoEvent* ev = cb->getEvent();
+    View3DInventorViewer* viewer = self->view->getViewer();
+    SbVec3f p1;
+    SbVec3f p2;
+    viewer->projectPointToLine(ev->getPosition(), p1, p2);
+    SbVec3f rayDir = p2 - p1;
+    if (rayDir.normalize() == 0.0F) {
+        return;
+    }
+
+    auto hitArrow = [&]() {
+        SoRayPickAction pick(viewer->getSoRenderManager()->getViewportRegion());
+        pick.setRay(p1, rayDir);
+        pick.apply(self->arrowRoot);
+        return pick.getPickedPoint() != nullptr;
+    };
+    auto axisParam = [&]() {
+        SbVec3f base = toSb(self->st.basePoint);
+        SbVec3f n = toSb(self->st.normal);
+        SbLine axis(base, base + n);
+        SbLine ray(p1, p1 + rayDir);
+        SbVec3f onAxis;
+        SbVec3f onRay;
+        if (!axis.getClosestPoints(ray, onAxis, onRay)) {
+            return self->dragStartParam;
+        }
+        return static_cast<double>((onAxis - base).dot(n));
+    };
+
+    if (SoMouseButtonEvent::isButtonPressEvent(ev, SoMouseButtonEvent::BUTTON1)) {
+        if (hitArrow()) {
+            self->dragging = true;
+            self->dragStartOffset = self->st.offset;
+            self->dragStartParam = axisParam();
+            self->setArrowHighlight(true);
+            cb->setHandled();
+        }
+    }
+    else if (SoMouseButtonEvent::isButtonReleaseEvent(ev, SoMouseButtonEvent::BUTTON1)) {
+        if (self->dragging) {
+            self->dragging = false;
+            self->setArrowHighlight(hitArrow());
+            self->capTimer->stop();
+            self->updateCap();
+            cb->setHandled();
+        }
+    }
+    else if (ev->isOfType(SoLocation2Event::getClassTypeId())) {
+        if (self->dragging) {
+            self->st.offset = self->dragStartOffset + axisParam() - self->dragStartParam;
+            self->updateOffsetSpin();
+            self->updatePlane();
+            cb->setHandled();
+        }
+        else {
+            self->setArrowHighlight(hitArrow());
+        }
+    }
+}
+
+void SectionView::createSketch()
+{
+    if (!view || !enabled) {
+        return;
+    }
+    getMainWindow()->setActiveWindow(view);
+    // the sketch normal points away from the kept material
+    Base::Vector3d p = planePoint();
+    Base::Vector3d n = -clipNormal();
+
+    std::ostringstream str;
+    str << std::setprecision(15);
+    str << "_pl = FreeCAD.Placement(FreeCAD.Vector(" << p.x << ", " << p.y << ", " << p.z
+        << "), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(" << n.x << ", " << n.y
+        << ", " << n.z << ")))\n"
+        << "_body = FreeCADGui.ActiveDocument.ActiveView.getActiveObject('pdbody')\n"
+        << "if _body:\n"
+        << "    _sk = _body.newObject('Sketcher::SketchObject', 'Sketch')\n"
+        << "    _xy = [f for f in _body.Origin.OriginFeatures if f.Role == 'XY_Plane'][0]\n"
+        << "    _sk.AttachmentSupport = [(_xy, '')]\n"
+        << "    _sk.MapMode = 'FlatFace'\n"
+        << "    _sk.AttachmentOffset = _body.getGlobalPlacement().inverse().multiply(_pl)\n"
+        << "else:\n"
+        << "    _sk = FreeCAD.ActiveDocument.addObject('Sketcher::SketchObject', 'Sketch')\n"
+        << "    _sk.Placement = _pl\n"
+        << "FreeCAD.ActiveDocument.recompute()\n"
+        << "FreeCADGui.ActiveDocument.setEdit(_sk)\n";
+
+    int tid = Command::openActiveDocumentCommand(
+        std::string(QT_TRANSLATE_NOOP("Command", "Create sketch on section plane"))
+    );
+    try {
+        Command::runCommand(Command::Doc, "import FreeCAD, FreeCADGui");
+        Command::runCommand(Command::Doc, str.str().c_str());
+        Command::commitCommand(tid);
+    }
+    catch (const Base::Exception& e) {
+        Command::abortCommand(tid);
+        e.reportException();
+    }
+}
+
+#include "moc_SectionView.cpp"

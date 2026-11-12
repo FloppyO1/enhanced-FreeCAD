@@ -450,6 +450,7 @@ SOURCE_GROUP("Command" FILES ${Command_SRCS})
 # The dialog sources
 SET(Dialog_CPP_SRCS
     Clipping.cpp
+    SectionView.cpp
     DemoMode.cpp
     Dialogs/DlgAbout.cpp
     Dialogs/DlgActivateWindowImp.cpp
@@ -494,6 +495,7 @@ SET(Dialog_CPP_SRCS
 
 SET(Dialog_HPP_SRCS
     Clipping.h
+    SectionView.h
     DemoMode.h
     Dialogs/DlgAbout.h
     Dialogs/DlgActivateWindowImp.h

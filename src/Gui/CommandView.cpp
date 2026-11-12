@@ -68,6 +68,7 @@
 #include "BitmapFactory.h"
 #include "Control.h"
 #include "Clipping.h"
+#include "SectionView.h"
 #include "DemoMode.h"
 #include "Dialogs/DlgSettingsImageImp.h"
 #include "Document.h"
@@ -733,6 +734,52 @@ bool StdCmdToggleClipPlane::hasClipping(App::Document* doc) const
                &std::pair<App::Document*, QPointer<Gui::Dialog::Clipping>>::first
            )
         != clippings.end();
+}
+
+//===========================================================================
+// Std_SectionView
+//===========================================================================
+
+DEF_STD_CMD_AC(StdCmdSectionView)
+
+StdCmdSectionView::StdCmdSectionView()
+    : Command("Std_SectionView")
+{
+    sGroup = "Standard-View";
+    sMenuText = QT_TR_NOOP("Section &View");
+    sToolTipText = QT_TR_NOOP(
+        "Toggles a section of the active 3D view.\n"
+        "The plane can be a base plane, the view plane or a selected reference,\n"
+        "and can be moved with the dragger or the offset in the panel."
+    );
+    sWhatsThis = "Std_SectionView";
+    sStatusTip = sToolTipText;
+    sPixmap = "Std_SectionView";
+    eType = Alter3DView;
+}
+
+Action* StdCmdSectionView::createAction()
+{
+    Action* pcAction = Command::createAction();
+    pcAction->setCheckable(true);
+    return pcAction;
+}
+
+void StdCmdSectionView::activated(int iMsg)
+{
+    auto view = qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
+    SectionView::toggle(view, iMsg != 0);
+}
+
+bool StdCmdSectionView::isActive()
+{
+    auto view = qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
+    auto section = SectionView::of(view, false);
+    bool on = section && section->isEnabled();
+    if (_pcAction && _pcAction->isChecked() != on) {
+        _pcAction->setBlockedChecked(on);
+    }
+    return view != nullptr;
 }
 
 //===========================================================================
@@ -4271,6 +4318,7 @@ void CreateViewStdCommands()
     rcCmdMgr.addCommand(new StdOrthographicCamera());
     rcCmdMgr.addCommand(new StdPerspectiveCamera());
     rcCmdMgr.addCommand(new StdCmdToggleClipPlane());
+    rcCmdMgr.addCommand(new StdCmdSectionView());
     rcCmdMgr.addCommand(new StdCmdDrawStyle());
     rcCmdMgr.addCommand(new StdCmdViewSaveCamera());
     rcCmdMgr.addCommand(new StdCmdViewRestoreCamera());
