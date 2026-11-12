@@ -22,9 +22,15 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
+#include <numbers>
 
 #include <BRepAlgo.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
@@ -36,13 +42,16 @@
 #include <Standard_Version.hxx>
 
 
+#include <Base/Console.h>
 #include <Base/Exception.h>
 #include <Base/Reader.h>
 #include <Base/Tools.h>
 #include <Mod/Part/App/SignalException.h>
 #include <Mod/Part/App/TopoShape.h>
+#include <Mod/Part/App/TopoShapeOpCode.h>
 
 #include "FeatureChamfer.h"
+#include "FeatureFillet.h"
 
 #include <Base/ProgramVersion.h>
 
@@ -63,6 +72,68 @@ static App::DocumentObjectExecReturn* validateParameters(
     double size2,
     double angle
 );
+
+// Triangular prism of the chamfer, for the boolean fallback (see makeDressUpByBoolean)
+static TopoDS_Shape makeChamferTool(
+    const DressUpCorner& corner,
+    int chamferType,
+    double size,
+    double size2,
+    bool flipDirection,
+    const std::string& featureName
+)
+{
+    // the sizes are measured on the reference face: the first one, the last one if flipped
+    const double angle = corner.u1.Angle(corner.u2);
+    double distRef = size;
+    double distOther = size;
+    switch (static_cast<Part::ChamferType>(chamferType)) {
+        case Part::ChamferType::equalDistance:
+            break;
+        case Part::ChamferType::twoDistances:
+            distOther = size2;
+            break;
+        case Part::ChamferType::distanceAngle: {
+            // size2 holds the angle between the chamfer and the reference face
+            const double alpha = Base::toRadians(size2);
+            const double opposite = std::numbers::pi - angle - alpha;
+            if (opposite < Precision::Angular()) {
+                return {};
+            }
+            distOther = size * std::sin(alpha) / std::sin(opposite);
+            break;
+        }
+    }
+    double d1 = flipDirection ? distOther : distRef;
+    double d2 = flipDirection ? distRef : distOther;
+    // a face bounded by a curved face that the tool would pass: scale the chamfer down
+    const double factor = corner.sizeFactor(d1, d2);
+    if (factor < 1.0) {
+        d1 *= factor;
+        d2 *= factor;
+        Base::Console().warning(
+            "{}: size of Edge{} reduced to {:.4g} so that the chamfer does not pass a curved "
+            "face\n",
+            featureName,
+            corner.edgeIndex,
+            size * factor
+        );
+    }
+
+    const gp_Vec bisector = gp_Vec(gp_Dir(gp_Vec(corner.u1) + gp_Vec(corner.u2)));
+    const gp_Vec dir(corner.dir);
+    const double ext = corner.convex ? 0.1 * std::max(d1, d2) : 0.0;
+    const gp_Pnt p = corner.start.Translated(-dir * ext);
+    // move the corner out of the wedge, so that the tool overlaps the faces
+    const gp_Pnt outer = p.Translated(-bisector * (0.1 * std::min(d1, d2)));
+    const gp_Pnt a1 = p.Translated(gp_Vec(corner.u1) * d1);
+    const gp_Pnt a2 = p.Translated(gp_Vec(corner.u2) * d2);
+
+    BRepBuilderAPI_MakePolygon polygon(outer, a1, a2, Standard_True);
+    BRepBuilderAPI_MakeFace face(polygon.Wire(), Standard_True);
+    BRepPrimAPI_MakePrism prism(face.Face(), dir * (corner.length + 2 * ext));
+    return prism.Shape();
+}
 
 Chamfer::Chamfer()
 {
@@ -91,6 +162,22 @@ Chamfer::Chamfer()
         "If true, then this overrides any edge changes made to the Base property or in the "
         "dialog.\n"
     );
+    ADD_PROPERTY_TYPE(
+        SizeMode,
+        (0L),
+        "Chamfer",
+        App::Prop_None,
+        "Dimension: use Size.\n"
+        "UpTo: compute Size so that the chamfer reaches the nearest of UpToReferences."
+    );
+    SizeMode.setEnums(DressUpSizeModeEnums);
+    ADD_PROPERTY_TYPE(
+        UpToReferences,
+        (nullptr),
+        "Chamfer",
+        App::Prop_None,
+        "Faces, edges or vertices that the chamfer reaches in UpTo mode"
+    );
 
     updateProperties();
 }
@@ -112,6 +199,8 @@ short Chamfer::mustExecute() const
             touched = Size.isTouched() || ChamferType.isTouched() || Angle.isTouched();
             break;
     }
+
+    touched = touched || SizeMode.isTouched() || UpToReferences.isTouched();
 
     if (Placement.isTouched() || touched) {
         return 1;
@@ -135,6 +224,7 @@ App::DocumentObjectExecReturn* Chamfer::execute()
         return new App::DocumentObjectExecReturn(e.what());
     }
 
+    const TopLoc_Location baseLocation = TopShape.getShape().Location();
     TopShape.setTransform(Base::Matrix4D());
 
     auto edges = UseAllEdges.getValue() ? TopShape.getSubTopoShapes(TopAbs_EDGE)
@@ -144,7 +234,25 @@ App::DocumentObjectExecReturn* Chamfer::execute()
         return new App::DocumentObjectExecReturn(QT_TRANSLATE_NOOP("Exception", "No edges specified"));
     }
     const int chamferType = ChamferType.getValue();
-    const double size = Size.getValue();
+    double size = Size.getValue();
+    if (SizeMode.getValue() == 1) {
+        try {
+            // the edge of the chamfer on the face lies on the reference
+            size = computeUpToSize(
+                TopShape,
+                edges,
+                getUpToReferenceShapes(UpToReferences, baseLocation),
+                [](const DressUpCorner&, double distance) { return distance; }
+            );
+        }
+        catch (Base::Exception& e) {
+            return new App::DocumentObjectExecReturn(e.what());
+        }
+        // show the computed size (purged with the other touched properties by the recompute)
+        if (std::abs(Size.getValue() - size) > Precision::Confusion()) {
+            Size.setValue(size);
+        }
+    }
     double size2 = Size2.getValue();
     const double angle = Angle.getValue();
     const bool flipDirection = FlipDirection.getValue();
@@ -162,15 +270,51 @@ App::DocumentObjectExecReturn* Chamfer::execute()
     try {
         TopoShape shape(0);
         Part::SignalException sig;
-        shape.makeElementChamfer(
-            TopShape,
-            edges,
-            static_cast<Part::ChamferType>(chamferType),
-            size,
-            size2,
-            nullptr,
-            flipDirection ? Part::Flip::flip : Part::Flip::none
-        );
+        usedBooleanFallback = false;
+        std::string occError;
+        try {
+            shape.makeElementChamfer(
+                TopShape,
+                edges,
+                static_cast<Part::ChamferType>(chamferType),
+                size,
+                size2,
+                nullptr,
+                flipDirection ? Part::Flip::flip : Part::Flip::none
+            );
+        }
+        catch (Standard_Failure& e) {
+            occError = e.GetMessageString();
+            shape = TopoShape(0);
+        }
+        catch (Base::Exception& e) {
+            occError = e.what();
+            shape = TopoShape(0);
+        }
+
+        // OCC fails when the chamfer consumes a whole face: try the boolean fallback
+        if (!isDressUpResultValid(TopShape, shape)) {
+            auto makeTool = [&](const DressUpCorner& corner) {
+                return makeChamferTool(
+                    corner,
+                    chamferType,
+                    size,
+                    size2,
+                    flipDirection,
+                    getFullName()
+                );
+            };
+            TopoShape fallback
+                = makeDressUpByBoolean(TopShape, edges, makeTool, Part::OpCodes::Chamfer);
+            if (!fallback.isNull()) {
+                Base::Console().log("{}: chamfer made with the boolean fallback\n", getFullName());
+                shape = fallback;
+                usedBooleanFallback = true;
+            }
+            else if (!occError.empty()) {
+                return new App::DocumentObjectExecReturn(occError);
+            }
+        }
         if (shape.isNull()) {
             return new App::DocumentObjectExecReturn(
                 QT_TRANSLATE_NOOP("Exception", "Failed to create chamfer")
@@ -258,7 +402,7 @@ void Chamfer::migrateFlippedProperties(const Base::XMLReader& reader)
 
 void Chamfer::onChanged(const App::Property* prop)
 {
-    if (prop == &ChamferType) {
+    if (prop == &ChamferType || prop == &SizeMode) {
         updateProperties();
     }
 
@@ -287,6 +431,8 @@ void Chamfer::updateProperties()
             disableproperty(&this->Size2, true);
             break;
     }
+    // in UpTo mode the size is computed
+    disableproperty(&this->Size, SizeMode.getValue() == 1);
 }
 
 static App::DocumentObjectExecReturn* validateParameters(

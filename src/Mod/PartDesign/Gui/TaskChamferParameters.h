@@ -65,6 +65,8 @@ private Q_SLOTS:
     void onRefDeleted() override;
     void onAddAllEdges();
     void onCheckBoxUseAllEdgesToggled(bool checked);
+    void onSizeModeChanged(int index);
+    void onUpToRefDeleted();
 
 protected:
     void setButtons(const selectionModes mode) override;
@@ -88,6 +90,9 @@ private:
     Gui::RotationGizmo* angleGizmo = nullptr;
     void setupGizmos(ViewProviderDressUp* vp);
     void setGizmoPositions();
+    /// shows the widgets of the size mode and the size computed in "Up to" mode
+    void updateSizeModeUi();
+    void updateSizeDisplay();
 };
 
 /// simulation dialog for the TaskView

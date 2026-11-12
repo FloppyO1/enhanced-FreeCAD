@@ -75,6 +75,10 @@ protected:
         App::DocumentObject* newBase,
         BaseFeatureChange change
     ) override;
+
+    /// Set by fillet/chamfer when the last execute used the boolean fallback: the new faces
+    /// are then not marked as generated and the preview finds them geometrically.
+    bool usedBooleanFallback = false;
 };
 
 }  // namespace PartDesign

@@ -75,6 +75,10 @@ TaskFilletParameters::TaskFilletParameters(ViewProviderDressUp* DressUpView, QWi
         ui->listWidgetReferences->addItem(QString::fromStdString(string));
     }
 
+    ui->sizeMode->setCurrentIndex(pcFillet->SizeMode.getValue());
+    fillUpToReferences(ui->listWidgetUpTo, pcFillet->UpToReferences);
+    updateSizeModeUi();
+
     QMetaObject::connectSlotsByName(this);
 
     // clang-format off
@@ -84,6 +88,15 @@ TaskFilletParameters::TaskFilletParameters(ViewProviderDressUp* DressUpView, QWi
         this, &TaskFilletParameters::onButtonRefSel);
     connect(ui->checkBoxUseAllEdges, &QToolButton::toggled,
         this, &TaskFilletParameters::onCheckBoxUseAllEdgesToggled);
+    connect(ui->sizeMode, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, &TaskFilletParameters::onSizeModeChanged);
+    connect(ui->buttonUpToSel, &QToolButton::toggled,
+        this, &TaskFilletParameters::onButtonUpToSel);
+
+    auto removeUpTo = new QAction(tr("Remove"), this);
+    ui->listWidgetUpTo->addAction(removeUpTo);
+    ui->listWidgetUpTo->setContextMenuPolicy(Qt::ActionsContextMenu);
+    connect(removeUpTo, &QAction::triggered, this, &TaskFilletParameters::onUpToRefDeleted);
 
     // Create context menu
     createDeleteAction(ui->listWidgetReferences);
@@ -118,6 +131,13 @@ void TaskFilletParameters::onSelectionChanged(const Gui::SelectionChanges& msg)
     if (msg.Type == Gui::SelectionChanges::AddSelection) {
         if (selectionMode == refSel) {
             referenceSelected(msg, ui->listWidgetReferences);
+            updateRadiusDisplay();
+        }
+        else if (selectionMode == upToSel) {
+            if (auto fillet = getObject<PartDesign::Fillet>()) {
+                upToReferenceSelected(msg, ui->listWidgetUpTo, fillet->UpToReferences);
+                updateRadiusDisplay();
+            }
         }
     }
     else if (msg.Type == Gui::SelectionChanges::ClrSelection) {
@@ -138,6 +158,7 @@ void TaskFilletParameters::onCheckBoxUseAllEdgesToggled(bool checked)
         ui->listWidgetReferences->setEnabled(!checked);
         fillet->UseAllEdges.setValue(checked);
         fillet->recomputeFeature();
+        updateRadiusDisplay();
     }
 }
 
@@ -145,12 +166,57 @@ void TaskFilletParameters::setButtons(const selectionModes mode)
 {
     ui->buttonRefSel->setChecked(mode == refSel);
     ui->buttonRefSel->setText(mode == refSel ? stopSelectionLabel() : startSelectionLabel());
+    QSignalBlocker block(ui->buttonUpToSel);
+    ui->buttonUpToSel->setChecked(mode == upToSel);
+    ui->buttonUpToSel->setText(mode == upToSel ? stopSelectionLabel() : tr("Select references"));
+}
+
+void TaskFilletParameters::onSizeModeChanged(int index)
+{
+    if (auto fillet = getObject<PartDesign::Fillet>()) {
+        setSelectionMode(index == 1 && fillet->UpToReferences.getSize() == 0 ? upToSel : none);
+        setupTransaction();
+        fillet->SizeMode.setValue(index);
+        updateSizeModeUi();
+        fillet->recomputeFeature();
+        hideOnError();
+        updateRadiusDisplay();
+    }
+}
+
+void TaskFilletParameters::onUpToRefDeleted()
+{
+    if (auto fillet = getObject<PartDesign::Fillet>()) {
+        deleteUpToReferences(ui->listWidgetUpTo, fillet->UpToReferences);
+        updateRadiusDisplay();
+    }
+}
+
+void TaskFilletParameters::updateSizeModeUi()
+{
+    const bool upTo = ui->sizeMode->currentIndex() == 1;
+    // in "Up to" mode the radius is computed: show it read-only
+    ui->filletRadius->setEnabled(!upTo);
+    ui->buttonUpToSel->setVisible(upTo);
+    ui->listWidgetUpTo->setVisible(upTo);
+    setGizmoPositions();
+}
+
+void TaskFilletParameters::updateRadiusDisplay()
+{
+    auto fillet = getObject<PartDesign::Fillet>();
+    if (!fillet || fillet->SizeMode.getValue() != 1) {
+        return;
+    }
+    QSignalBlocker block(ui->filletRadius);
+    ui->filletRadius->setValue(fillet->Radius.getValue());
 }
 
 void TaskFilletParameters::onRefDeleted()
 {
     TaskDressUpParameters::deleteRef(ui->listWidgetReferences);
     setGizmoPositions();
+    updateRadiusDisplay();
 }
 
 void TaskFilletParameters::onAddAllEdges()
@@ -228,7 +294,7 @@ void TaskFilletParameters::setGizmoPositions()
     }
 
     auto fillet = getObject<PartDesign::Fillet>();
-    if (!fillet || fillet->isError()) {
+    if (!fillet || fillet->isError() || fillet->SizeMode.getValue() == 1) {
         gizmoContainer->visible = false;
         return;
     }

@@ -25,7 +25,16 @@
 #include <charconv>
 #include <utility>
 
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
+#include <GProp_GProps.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Precision.hxx>
+#include <gp_Pnt2d.hxx>
 #include <BRep_Tool.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
@@ -501,6 +510,58 @@ void DressUp::getAddSubShape(Part::TopoShape& addShape, Part::TopoShape& subShap
     }
 }
 
+namespace
+{
+
+// Faces of @a shape that do not lie on any face of @a base (new fillet/chamfer faces)
+std::vector<int> findNewFaces(const Part::TopoShape& shape, const TopoDS_Shape& base)
+{
+    std::vector<int> result;
+    const int count = shape.countSubShapes(TopAbs_FACE);
+    for (int faceId = 1; faceId <= count; ++faceId) {
+        const TopoDS_Face face = TopoDS::Face(shape.getSubShape(TopAbs_FACE, faceId));
+        Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+        if (surface.IsNull()) {
+            continue;
+        }
+
+        // a point inside the face: the center of mass, else the middle of the parameter box
+        std::vector<gp_Pnt> candidates;
+        GProp_GProps props;
+        BRepGProp::SurfaceProperties(face, props);
+        if (props.Mass() > Precision::Confusion()) {
+            GeomAPI_ProjectPointOnSurf projection(props.CentreOfMass(), surface);
+            if (projection.NbPoints() > 0) {
+                candidates.push_back(projection.NearestPoint());
+            }
+        }
+        double u1, u2, v1, v2;
+        BRepTools::UVBounds(face, u1, u2, v1, v2);
+        candidates.push_back(surface->Value((u1 + u2) / 2, (v1 + v2) / 2));
+
+        for (const gp_Pnt& point : candidates) {
+            GeomAPI_ProjectPointOnSurf projection(point, surface);
+            if (projection.NbPoints() < 1) {
+                continue;
+            }
+            double u, v;
+            projection.LowerDistanceParameters(u, v);
+            BRepClass_FaceClassifier classifier(face, gp_Pnt2d(u, v), Precision::Confusion());
+            if (classifier.State() != TopAbs_IN) {
+                continue;
+            }
+            BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(), base);
+            if (distance.IsDone() && distance.Value() > 10 * Precision::Confusion()) {
+                result.push_back(faceId);
+            }
+            break;
+        }
+    }
+    return result;
+}
+
+}  // namespace
+
 void DressUp::updatePreviewShape()
 {
     auto shape = Shape.getShape();
@@ -512,7 +573,12 @@ void DressUp::updatePreviewShape()
     }
 
     std::vector<int> faces, edges, vertices;
-    getGeneratedShapes(faces, edges, vertices);
+    if (usedBooleanFallback) {
+        faces = findNewFaces(shape, baseFeature->Shape.getShape().getShape());
+    }
+    else {
+        getGeneratedShapes(faces, edges, vertices);
+    }
 
     if (faces.empty()) {
         PreviewShape.setValue(TopoDS_Shape());

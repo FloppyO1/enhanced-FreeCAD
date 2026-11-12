@@ -56,6 +56,8 @@ private Q_SLOTS:
     void onRefDeleted() override;
     void onAddAllEdges();
     void onCheckBoxUseAllEdgesToggled(bool checked);
+    void onSizeModeChanged(int index);
+    void onUpToRefDeleted();
 
 protected:
     double getLength() const;
@@ -71,6 +73,9 @@ private:
     Gui::LinearGizmo* radiusGizmo2 = nullptr;
     void setupGizmos(ViewProviderDressUp* vp);
     void setGizmoPositions();
+    /// shows the widgets of the size mode and the radius computed in "Up to" mode
+    void updateSizeModeUi();
+    void updateRadiusDisplay();
 };
 
 /// simulation dialog for the TaskView

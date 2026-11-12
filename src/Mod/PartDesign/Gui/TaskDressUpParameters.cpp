@@ -23,6 +23,8 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+#include <functional>
 #include <string_view>
 
 #include <QAction>
@@ -31,6 +33,8 @@
 #include <App/Application.h>
 #include <App/Document.h>
 #include <App/DocumentObject.h>
+#include <App/ElementNamingUtils.h>
+#include <App/PropertyLinks.h>
 #include <App/Transactions.h>
 #include <Gui/Command.h>
 #include <Gui/Selection/Selection.h>
@@ -507,6 +511,107 @@ void TaskDressUpParameters::onButtonRefSel(bool checked)
     setSelectionMode(checked ? refSel : none);
 }
 
+void TaskDressUpParameters::onButtonUpToSel(bool checked)
+{
+    setSelectionMode(checked ? upToSel : none);
+}
+
+void TaskDressUpParameters::fillUpToReferences(
+    QListWidget* widget,
+    const App::PropertyLinkSubList& refs
+)
+{
+    QSignalBlocker block(widget);
+    widget->clear();
+    const auto& objects = refs.getValues();
+    const auto& subs = refs.getSubValues();
+    for (std::size_t i = 0; i < objects.size() && i < subs.size(); ++i) {
+        if (!objects[i]) {
+            continue;
+        }
+        QString text = QString::fromUtf8(objects[i]->Label.getValue());
+        if (!subs[i].empty()) {
+            text += QStringLiteral(":") + QString::fromStdString(subs[i]);
+        }
+        widget->addItem(text);
+    }
+}
+
+void TaskDressUpParameters::upToReferenceSelected(
+    const SelectionChanges& msg,
+    QListWidget* widget,
+    App::PropertyLinkSubList& refs
+)
+{
+    App::DocumentObject* dressUp = DressUpView->getObject();
+    if (std::strcmp(msg.pDocName, dressUp->getDocument()->getName()) != 0) {
+        return;
+    }
+    Selection().clearSelection();
+
+    App::DocumentObject* object = dressUp->getDocument()->getObject(msg.pObjectName);
+    if (!object) {
+        return;
+    }
+    const char* element = nullptr;
+    App::DocumentObject* target = object->resolve(msg.pSubName, nullptr, nullptr, &element);
+    if (!target || target == dressUp) {
+        return;
+    }
+    const std::string sub = element ? Data::oldElementName(element) : std::string();
+
+    std::vector<App::DocumentObject*> objects = refs.getValues();
+    std::vector<std::string> subs = refs.getSubValues();
+    subs.resize(objects.size());
+    bool removed = false;
+    for (std::size_t i = 0; i < objects.size(); ++i) {
+        if (objects[i] == target && subs[i] == sub) {
+            objects.erase(objects.begin() + static_cast<long>(i));
+            subs.erase(subs.begin() + static_cast<long>(i));
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) {
+        objects.push_back(target);
+        subs.push_back(sub);
+    }
+
+    setupTransaction();
+    refs.setValues(objects, subs);
+    fillUpToReferences(widget, refs);
+    dressUp->recomputeFeature();
+    hideOnError();
+}
+
+void TaskDressUpParameters::deleteUpToReferences(QListWidget* widget, App::PropertyLinkSubList& refs)
+{
+    std::vector<App::DocumentObject*> objects = refs.getValues();
+    std::vector<std::string> subs = refs.getSubValues();
+    subs.resize(objects.size());
+    std::vector<int> rows;
+    for (auto item : widget->selectedItems()) {
+        rows.push_back(widget->row(item));
+    }
+    if (rows.empty()) {
+        return;
+    }
+    // erase backwards so that the remaining rows stay valid
+    std::ranges::sort(rows, std::greater<>());
+    for (int row : rows) {
+        if (row >= 0 && row < static_cast<int>(objects.size())) {
+            objects.erase(objects.begin() + row);
+            subs.erase(subs.begin() + row);
+        }
+    }
+
+    setupTransaction();
+    refs.setValues(objects, subs);
+    fillUpToReferences(widget, refs);
+    DressUpView->getObject()->recomputeFeature();
+    hideOnError();
+}
+
 void TaskDressUpParameters::doubleClicked(QListWidgetItem* item)
 {
     // executed when the user double-clicks on any item in the list
@@ -769,6 +874,14 @@ void TaskDressUpParameters::setSelectionGate()
     }
     else {
         AllowSelectionFlags allow;
+        if (selectionMode == upToSel) {
+            // "Up to" references: vertices, edges and faces
+            allow.setFlag(AllowSelection::POINT);
+            allow.setFlag(AllowSelection::EDGE);
+            allow.setFlag(AllowSelection::FACE);
+            Gui::Selection().addSelectionGate(new ReferenceSelection(this->getBase(), allow));
+            return;
+        }
         allow.setFlag(AllowSelection::SOLID, allowSolids);
         allow.setFlag(AllowSelection::EDGE, allowEdges);
         allow.setFlag(AllowSelection::FACE, allowFaces);

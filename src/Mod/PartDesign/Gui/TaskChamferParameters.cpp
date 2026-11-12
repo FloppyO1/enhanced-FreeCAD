@@ -80,6 +80,9 @@ TaskChamferParameters::TaskChamferParameters(ViewProviderDressUp* DressUpView, Q
         ui->listWidgetReferences->addItem(QString::fromStdString(string));
     }
 
+    ui->sizeMode->setCurrentIndex(pcChamfer->SizeMode.getValue());
+    fillUpToReferences(ui->listWidgetUpTo, pcChamfer->UpToReferences);
+
     QMetaObject::connectSlotsByName(this);
 
     // clang-format off
@@ -97,6 +100,15 @@ TaskChamferParameters::TaskChamferParameters(ViewProviderDressUp* DressUpView, Q
             this, &TaskChamferParameters::onButtonRefSel);
     connect(ui->checkBoxUseAllEdges, &QCheckBox::toggled,
             this, &TaskChamferParameters::onCheckBoxUseAllEdgesToggled);
+    connect(ui->sizeMode, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &TaskChamferParameters::onSizeModeChanged);
+    connect(ui->buttonUpToSel, &QToolButton::toggled,
+            this, &TaskChamferParameters::onButtonUpToSel);
+
+    auto removeUpTo = new QAction(tr("Remove"), this);
+    ui->listWidgetUpTo->addAction(removeUpTo);
+    ui->listWidgetUpTo->setContextMenuPolicy(Qt::ActionsContextMenu);
+    connect(removeUpTo, &QAction::triggered, this, &TaskChamferParameters::onUpToRefDeleted);
 
     // Create context menu
     createDeleteAction(ui->listWidgetReferences);
@@ -116,6 +128,7 @@ TaskChamferParameters::TaskChamferParameters(ViewProviderDressUp* DressUpView, Q
     // clang-format on
 
     setupGizmos(DressUpView);
+    updateSizeModeUi();
 
     if (strings.size() == 0) {
         setSelectionMode(refSel);
@@ -172,6 +185,13 @@ void TaskChamferParameters::onSelectionChanged(const Gui::SelectionChanges& msg)
     if (msg.Type == Gui::SelectionChanges::AddSelection) {
         if (selectionMode == refSel) {
             referenceSelected(msg, ui->listWidgetReferences);
+            updateSizeDisplay();
+        }
+        else if (selectionMode == upToSel) {
+            if (auto chamfer = getObject<PartDesign::Chamfer>()) {
+                upToReferenceSelected(msg, ui->listWidgetUpTo, chamfer->UpToReferences);
+                updateSizeDisplay();
+            }
         }
     }
     else if (msg.Type == Gui::SelectionChanges::ClrSelection) {
@@ -192,6 +212,7 @@ void TaskChamferParameters::onCheckBoxUseAllEdgesToggled(bool checked)
         ui->listWidgetReferences->setEnabled(!checked);
         chamfer->UseAllEdges.setValue(checked);
         chamfer->recomputeFeature();
+        updateSizeDisplay();
     }
 }
 
@@ -199,12 +220,57 @@ void TaskChamferParameters::setButtons(const selectionModes mode)
 {
     ui->buttonRefSel->setChecked(mode == refSel);
     ui->buttonRefSel->setText(mode == refSel ? stopSelectionLabel() : startSelectionLabel());
+    QSignalBlocker block(ui->buttonUpToSel);
+    ui->buttonUpToSel->setChecked(mode == upToSel);
+    ui->buttonUpToSel->setText(mode == upToSel ? stopSelectionLabel() : tr("Select references"));
+}
+
+void TaskChamferParameters::onSizeModeChanged(int index)
+{
+    if (auto chamfer = getObject<PartDesign::Chamfer>()) {
+        setSelectionMode(index == 1 && chamfer->UpToReferences.getSize() == 0 ? upToSel : none);
+        setupTransaction();
+        chamfer->SizeMode.setValue(index);
+        updateSizeModeUi();
+        chamfer->recomputeFeature();
+        hideOnError();
+        updateSizeDisplay();
+    }
+}
+
+void TaskChamferParameters::onUpToRefDeleted()
+{
+    if (auto chamfer = getObject<PartDesign::Chamfer>()) {
+        deleteUpToReferences(ui->listWidgetUpTo, chamfer->UpToReferences);
+        updateSizeDisplay();
+    }
+}
+
+void TaskChamferParameters::updateSizeModeUi()
+{
+    const bool upTo = ui->sizeMode->currentIndex() == 1;
+    // in "Up to" mode the size is computed: show it read-only
+    ui->chamferSize->setEnabled(!upTo);
+    ui->buttonUpToSel->setVisible(upTo);
+    ui->listWidgetUpTo->setVisible(upTo);
+    setGizmoPositions();
+}
+
+void TaskChamferParameters::updateSizeDisplay()
+{
+    auto chamfer = getObject<PartDesign::Chamfer>();
+    if (!chamfer || chamfer->SizeMode.getValue() != 1) {
+        return;
+    }
+    QSignalBlocker block(ui->chamferSize);
+    ui->chamferSize->setValue(chamfer->Size.getValue());
 }
 
 void TaskChamferParameters::onRefDeleted()
 {
     TaskDressUpParameters::deleteRef(ui->listWidgetReferences);
     setGizmoPositions();
+    updateSizeDisplay();
 }
 
 void TaskChamferParameters::onAddAllEdges()
@@ -222,6 +288,7 @@ void TaskChamferParameters::onTypeChanged(int index)
         chamfer->recomputeFeature();
         // hide the chamfer if there was a computation error
         hideOnError();
+        updateSizeDisplay();
     }
 }
 
@@ -234,6 +301,7 @@ void TaskChamferParameters::onSizeChanged(double len)
         chamfer->recomputeFeature();
         // hide the chamfer if there was a computation error
         hideOnError();
+        updateSizeDisplay();
     }
 }
 
@@ -246,6 +314,7 @@ void TaskChamferParameters::onSize2Changed(double len)
         chamfer->recomputeFeature();
         // hide the chamfer if there was a computation error
         hideOnError();
+        updateSizeDisplay();
     }
 }
 
@@ -258,6 +327,7 @@ void TaskChamferParameters::onAngleChanged(double angle)
         chamfer->recomputeFeature();
         // hide the chamfer if there was a computation error
         hideOnError();
+        updateSizeDisplay();
     }
 }
 
@@ -270,6 +340,7 @@ void TaskChamferParameters::onFlipDirection(bool flip)
         chamfer->recomputeFeature();
         // hide the chamfer if there was a computation error
         hideOnError();
+        updateSizeDisplay();
 
         setGizmoPositions();
     }
@@ -396,7 +467,7 @@ void TaskChamferParameters::setGizmoPositions()
     }
 
     auto chamfer = getObject<PartDesign::Chamfer>();
-    if (!chamfer || chamfer->isError()) {
+    if (!chamfer || chamfer->isError() || chamfer->SizeMode.getValue() == 1) {
         gizmoContainer->visible = false;
         return;
     }

@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <App/PropertyLinks.h>
 #include <App/PropertyStandard.h>
 #include <App/PropertyUnits.h>
 #include "FeatureDressUp.h"
@@ -45,6 +46,8 @@ public:
     App::PropertyAngle Angle;
     App::PropertyBool FlipDirection;
     App::PropertyBool UseAllEdges;
+    App::PropertyEnumeration SizeMode;
+    App::PropertyLinkSubList UpToReferences;
 
     /** @name methods override feature */
     //@{

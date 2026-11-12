@@ -93,6 +93,35 @@
     </layout>
    </item>
    <item>
+    <layout class="QHBoxLayout" name="layoutSizeMode">
+     <item>
+      <widget class="QLabel" name="labelSizeMode">
+       <property name="text">
+        <string>Size mode</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="sizeMode">
+       <property name="toolTip">
+        <string>Dimension: enter the size.
+   Up to: the size is computed so that the edge of the feature reaches the nearest reference</string>
+       </property>
+       <item>
+        <property name="text">
+         <string>Dimension</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>Up to</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
     <layout class="QFormLayout" name="formLayout_4">
      <item row="0" column="0">
       <widget class="QLabel" name="sizeLabel">
@@ -112,6 +141,29 @@
       </widget>
      </item>
     </layout>
+   </item>
+   <item>
+    <widget class="QToolButton" name="buttonUpToSel">
+     <property name="toolTip">
+      <string>Select faces, edges or vertices that the feature reaches; select a reference again to remove it</string>
+     </property>
+     <property name="text">
+      <string>Select references</string>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QListWidget" name="listWidgetUpTo">
+     <property name="toolTip">
+      <string>References reached by the feature, the nearest one sets the size</string>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::ExtendedSelection</enum>
+     </property>
+    </widget>
    </item>
    <item>
     <widget class="QCheckBox" name="checkBoxUseAllEdges">
@@ -217,7 +269,10 @@
   <tabstop>listWidgetReferences</tabstop>
   <tabstop>chamferType</tabstop>
   <tabstop>flipDirection</tabstop>
+  <tabstop>sizeMode</tabstop>
   <tabstop>chamferSize</tabstop>
+  <tabstop>buttonUpToSel</tabstop>
+  <tabstop>listWidgetUpTo</tabstop>
   <tabstop>checkBoxUseAllEdges</tabstop>
   <tabstop>chamferSize2</tabstop>
   <tabstop>chamferAngle</tabstop>

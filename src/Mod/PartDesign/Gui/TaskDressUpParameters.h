@@ -37,6 +37,11 @@ class QAction;
 class QListWidget;
 class QListWidgetItem;
 
+namespace App
+{
+class PropertyLinkSubList;
+}
+
 namespace Part
 {
 class Feature;
@@ -76,6 +81,7 @@ public:
 
 protected Q_SLOTS:
     void onButtonRefSel(const bool checked);
+    void onButtonUpToSel(const bool checked);
     void doubleClicked(QListWidgetItem* item);
     void setSelection(QListWidgetItem* current);
     void itemClickedTimeout();
@@ -115,11 +121,23 @@ protected:
         none,
         refSel,
         plane,
-        line
+        line,
+        upToSel  ///< selection of the "Up to" references of fillet/chamfer
     };
     void setSelectionMode(selectionModes mode);
     virtual void setButtons(const selectionModes mode) = 0;
     static void removeItemFromListWidget(QListWidget* widget, const char* itemstr);
+
+    /// Adds the selected vertex/edge/face to @a refs, or removes it if already there
+    void upToReferenceSelected(
+        const Gui::SelectionChanges& msg,
+        QListWidget* widget,
+        App::PropertyLinkSubList& refs
+    );
+    /// Removes the references selected in @a widget from @a refs
+    void deleteUpToReferences(QListWidget* widget, App::PropertyLinkSubList& refs);
+    /// Shows @a refs in @a widget
+    static void fillUpToReferences(QListWidget* widget, const App::PropertyLinkSubList& refs);
 
     ViewProviderDressUp* getDressUpView() const;
 
