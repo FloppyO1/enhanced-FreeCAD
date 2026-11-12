@@ -495,7 +495,12 @@ void ViewOrientationCube::activate(PickId id)
     const SbRotation orientation = nearest ? NaviCube::getNearestFaceOrientation(viewer, id)
                                            : NaviCube::getFaceOrientation(id);
     viewer->setCameraOrientation(orientation);
-    fitWhenIdle(150);
+    // fitting after the rotation can be turned off (View > Standard views)
+    if (App::GetApplication()
+            .GetParameterGroupByPath("User parameter:BaseApp/Preferences/View/OrientationCube")
+            ->GetBool("FitAll", true)) {
+        fitWhenIdle(150);
+    }
 }
 
 void ViewOrientationCube::fitWhenIdle(int retries)

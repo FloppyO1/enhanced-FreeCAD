@@ -848,6 +848,54 @@ bool StdCmdViewOrientationCube::isActive()
 }
 
 //===========================================================================
+// Std_ViewOrientationCubeFit
+//===========================================================================
+
+DEF_STD_CMD_AC(StdCmdViewOrientationCubeFit)
+
+StdCmdViewOrientationCubeFit::StdCmdViewOrientationCubeFit()
+    : Command("Std_ViewOrientationCubeFit")
+{
+    sGroup = "Standard-View";
+    sMenuText = QT_TR_NOOP("Orientation Cube &Fits View");
+    sToolTipText = QT_TR_NOOP(
+        "When enabled, choosing a view on the orientation cube also fits the model to the view"
+    );
+    sWhatsThis = "Std_ViewOrientationCubeFit";
+    sStatusTip = sToolTipText;
+    eType = 0;
+}
+
+void StdCmdViewOrientationCubeFit::activated(int iMsg)
+{
+    App::GetApplication()
+        .GetParameterGroupByPath("User parameter:BaseApp/Preferences/View/OrientationCube")
+        ->SetBool("FitAll", iMsg != 0);
+}
+
+bool StdCmdViewOrientationCubeFit::isActive()
+{
+    if (_pcAction) {
+        const bool fit = App::GetApplication()
+                             .GetParameterGroupByPath(
+                                 "User parameter:BaseApp/Preferences/View/OrientationCube"
+                             )
+                             ->GetBool("FitAll", true);
+        if (_pcAction->isChecked() != fit) {
+            _pcAction->setBlockedChecked(fit);
+        }
+    }
+    return true;
+}
+
+Action* StdCmdViewOrientationCubeFit::createAction()
+{
+    Action* pcAction = Command::createAction();
+    pcAction->setCheckable(true);
+    return pcAction;
+}
+
+//===========================================================================
 // StdCmdDrawStyle
 //===========================================================================
 class StdCmdDrawStyle: public Gui::Command
@@ -4386,6 +4434,7 @@ void CreateViewStdCommands()
     rcCmdMgr.addCommand(new StdCmdToggleClipPlane());
     rcCmdMgr.addCommand(new StdCmdSectionView());
     rcCmdMgr.addCommand(new StdCmdViewOrientationCube());
+    rcCmdMgr.addCommand(new StdCmdViewOrientationCubeFit());
     rcCmdMgr.addCommand(new StdCmdDrawStyle());
     rcCmdMgr.addCommand(new StdCmdViewSaveCamera());
     rcCmdMgr.addCommand(new StdCmdViewRestoreCamera());

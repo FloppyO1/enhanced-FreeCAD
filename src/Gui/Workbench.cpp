@@ -742,7 +742,8 @@ MenuItem* StdWorkbench::setupMenuBar() const
     auto stdviews = new MenuItem;
     stdviews->setCommand("Standard &Views");
     *stdviews << "Std_ViewFitAll" << "Std_ViewFitSelection" << "Std_AlignToSelection" << axoviews
-              << "Std_ViewOrientationCube" << "Separator" << "Std_ViewHome" << "Std_ViewFront" << "Std_ViewTop"
+              << "Std_ViewOrientationCube" << "Std_ViewOrientationCubeFit" << "Separator"
+              << "Std_ViewHome" << "Std_ViewFront" << "Std_ViewTop"
               << "Std_ViewRight" << "Std_ViewRear" << "Std_ViewBottom" << "Std_ViewLeft"
               << "Separator" << "Std_ViewRotateLeft" << "Std_ViewRotateRight" << "Separator"
               << "Std_StoreWorkingView" << "Std_RecallWorkingView";
