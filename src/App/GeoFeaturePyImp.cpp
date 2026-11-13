@@ -114,6 +114,24 @@ PyObject* GeoFeaturePy::getPropertyOfGeometry(PyObject* args)
     return Py::new_reference_to(Py::None());
 }
 
+PyObject* GeoFeaturePy::getElementOrigin(PyObject* args)
+{
+    const char* element {nullptr};
+    if (!PyArg_ParseTuple(args, "s", &element)) {
+        return nullptr;
+    }
+
+    PY_TRY
+    {
+        DocumentObject* origin = getGeoFeaturePtr()->getElementOrigin(element);
+        if (origin) {
+            return origin->getPyObject();
+        }
+        return Py::new_reference_to(Py::None());
+    }
+    PY_CATCH;
+}
+
 PyObject* GeoFeaturePy::getCustomAttributes(const char* /*attr*/) const
 {
     return nullptr;

@@ -262,6 +262,25 @@ A larger value makes it easier to select elements, but may prevent selection of 
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="Gui::PrefCheckBox" name="checkBoxElementOrigin">
+        <property name="text">
+         <string>Highlight the feature that created the selected face, edge or vertex</string>
+        </property>
+        <property name="toolTip">
+         <string>When a sub-element is selected in the 3D view, the tree item of the object that created it is highlighted, using the topological naming history.</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="prefEntry" stdset="0">
+         <cstring>HighlightElementOrigin</cstring>
+        </property>
+        <property name="prefPath" stdset="0">
+         <cstring>TreeView</cstring>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

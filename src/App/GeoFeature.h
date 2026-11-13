@@ -209,6 +209,19 @@ public:
         return nullptr;
     }
 
+    /** Return the object that created the given element
+     *
+     * @param element: the element name (e.g. "Face3") of this object's geometry
+     *
+     * @return The object whose geometry first introduced the element, found by
+     * following the element history back as long as the element keeps its type,
+     * or nullptr if the history is not available.
+     */
+    virtual DocumentObject* getElementOrigin(const char* /*element*/) const
+    {
+        return nullptr;
+    }
+
     virtual std::vector<const char*> getElementTypes(bool all = true) const;
 
     /// Return the higher level element names of the given element

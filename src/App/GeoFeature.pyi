@@ -76,3 +76,10 @@ class GeoFeature(DocumentObject):
         If an object has no such property then None is returned.
         Unlike to getPropertyNameOfGeometry this function returns the geometry, not its name.
         """
+
+    def getElementOrigin(self, element: str, /) -> Optional[DocumentObject]:
+        """
+        Returns the object that created the given element (e.g. "Face3") of this
+        object's geometry, found through the topological element history.
+        Returns None if the history is not available.
+        """

@@ -598,6 +598,49 @@ static std::vector<std::pair<long, Data::MappedName>> getElementSource(
     return ret;
 }
 
+App::DocumentObject* Feature::getElementOrigin(const char* element) const
+{
+    if (!element || !element[0]) {
+        return nullptr;
+    }
+
+    // Highest dimension of the sub-shapes: 3 for solids, 2 for faces, 1 for edges
+    auto shapeDimension = [](App::DocumentObject* obj) {
+        TopoShape shape = getTopoShape(obj, ShapeOption::ResolveLink);
+        if (shape.countSubShapes(TopAbs_SOLID) > 0) {
+            return 3;
+        }
+        if (shape.countSubShapes(TopAbs_FACE) > 0) {
+            return 2;
+        }
+        if (shape.countSubShapes(TopAbs_EDGE) > 0) {
+            return 1;
+        }
+        return 0;
+    };
+
+    // Follow the history only while the element keeps its type, so that a face
+    // is traced back to the feature that generated it and not to the sketch edge
+    // it was extruded from. Lower dimensional sources are skipped as well, e.g. an
+    // edge made by a pocket is traced to the pocket and not to its sketch.
+    auto self = const_cast<Feature*>(this);
+    auto history = getElementHistory(self, element, true, true);
+    App::DocumentObject* origin = self;
+    int dimension = shapeDimension(self);
+    for (const auto& item : history) {
+        if (!item.obj || shapeDimension(item.obj) < dimension) {
+            break;
+        }
+        // The element can only come from an object this one depends on. Element maps
+        // with ambiguous names may point to an unrelated object: stop there.
+        if (item.obj != self && !self->isInOutListRecursive(item.obj)) {
+            break;
+        }
+        origin = item.obj;
+    }
+    return origin;
+}
+
 std::list<Data::HistoryItem> Feature::getElementHistory(
     App::DocumentObject* feature,
     const char* name,

@@ -263,6 +263,9 @@ private:
         bool force
     );
 
+    /// Highlight the objects that created the selected sub-elements
+    void updateElementOriginHighlight(bool force = false);
+
     bool CheckForDependents();
     void addDependentToSelection(App::Document* doc, App::DocumentObject* docObject);
     static TreeWidget* getTreeForSelection();
@@ -314,6 +317,11 @@ private:
     std::unordered_map<App::DocumentObject*, std::bitset<32>> ChangedObjects;
 
     std::unordered_map<std::string, std::vector<long>> NewObjects;
+
+    // Objects currently highlighted as the origin of the selected elements
+    std::vector<App::DocumentObjectT> elementOrigins;
+    // Set after a recompute to refresh the origin highlight
+    bool selectionHintsDirty = false;
 
     static std::set<TreeWidget*> Instances;
 
@@ -372,6 +380,8 @@ public:
     bool populateObject(App::DocumentObject* obj);
     void sortObjectItems();
     void selectAllInstances(const ViewProviderDocumentObject& vpd);
+    /// Highlight all items of the object that created the selected element
+    void setElementOriginHighlight(const ViewProviderDocumentObject& vpd, bool set, bool scroll);
     bool showItem(DocumentObjectItem* item, bool select, bool force = false);
     void updateItemsVisibility(QTreeWidgetItem* item, bool show);
     void updateLinks(const ViewProviderDocumentObject& view);
@@ -451,6 +461,8 @@ protected:
     using ViewParentMap
         = std::unordered_map<const ViewProvider*, std::vector<ViewProviderDocumentObject*>>;
     void populateParents(const ViewProvider* vp, ViewParentMap&);
+    /// Make sure that all the items of the given object are created
+    void populateAllInstances(const ViewProviderDocumentObject& vpd);
 
     void setReadOnlyIconInfo(int column, QIcon& overlayedIcon);
 

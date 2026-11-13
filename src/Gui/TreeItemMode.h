@@ -36,7 +36,8 @@ enum class HighlightMode
     Bold,
     Blue,
     LightBlue,
-    UserDefined
+    UserDefined,
+    ElementOrigin
 };
 
 /// highlight modes for the tree items

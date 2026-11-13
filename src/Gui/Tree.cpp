@@ -51,6 +51,7 @@
 #include <App/Document.h>
 #include <App/DocumentObjectGroup.h>
 #include <App/AutoTransaction.h>
+#include <App/GeoFeature.h>
 #include <App/GeoFeatureGroupExtension.h>
 #include <App/Link.h>
 #include <App/SuppressibleExtension.h>
@@ -3724,6 +3725,12 @@ void TreeWidget::onUpdateStatus()
     updateGeometries();
     statusTimer->stop();
 
+    if (selectionHintsDirty) {
+        // Items may be recreated and the element history may change on recompute
+        selectionHintsDirty = false;
+        updateElementOriginHighlight(true);
+    }
+
     FC_LOG("done update status");
 }
 
@@ -4113,6 +4120,10 @@ void TreeWidget::onItemSelectionChanged()
     }
 
     this->blockSelection(lock);
+
+    // The selection made in this tree is not notified back to it, so refresh the
+    // origin highlight here
+    updateElementOriginHighlight();
 }
 
 void TreeWidget::synchronizeSelectionCheckBoxes()
@@ -4198,7 +4209,83 @@ void TreeWidget::onSelectTimer()
     }
     this->blockSelection(locked);
     selectTimer->stop();
-    return;
+    updateElementOriginHighlight();
+}
+
+void TreeWidget::updateElementOriginHighlight(bool force)
+{
+    std::vector<App::DocumentObjectT> origins;
+    ParameterGrp::handle hGrp = App::GetApplication().GetParameterGroupByPath(
+        "User parameter:BaseApp/Preferences/TreeView"
+    );
+    if (hGrp->GetBool("HighlightElementOrigin", true)) {
+        for (const auto& sel : Selection().getCompleteSelection(ResolveMode::NoResolve)) {
+            if (!sel.pObject || !sel.SubName || !sel.SubName[0]) {
+                continue;
+            }
+            try {
+                App::SubObjectT selT(sel.pObject, sel.SubName);
+                std::string element = selT.getOldElementName();
+                auto sobj = selT.getSubObject();
+                if (element.empty() || !sobj) {
+                    continue;
+                }
+                auto geo = freecad_cast<App::GeoFeature*>(sobj);
+                if (!geo) {
+                    continue;
+                }
+                auto origin = geo->getElementOrigin(element.c_str());
+                if (!origin || origin == sobj || !origin->isAttachedToDocument()) {
+                    continue;
+                }
+                App::DocumentObjectT originT(origin);
+                if (std::ranges::find(origins, originT) == origins.end()) {
+                    origins.push_back(originT);
+                }
+            }
+            catch (...) {
+                // The history is only a visual hint: ignore any failure
+            }
+        }
+    }
+
+    if (!force && origins == elementOrigins) {
+        return;
+    }
+
+    auto setHighlight = [this](const App::DocumentObjectT& objT, bool set, bool scroll) {
+        auto obj = objT.getObject();
+        if (!obj) {
+            return;
+        }
+        auto vp = freecad_cast<ViewProviderDocumentObject*>(
+            Application::Instance->getViewProvider(obj)
+        );
+        if (!vp) {
+            return;
+        }
+        auto it = DocumentMap.find(vp->getDocument());
+        if (it != DocumentMap.end()) {
+            it->second->setElementOriginHighlight(*vp, set, scroll);
+        }
+    };
+
+    for (const auto& objT : elementOrigins) {
+        if (force || std::ranges::find(origins, objT) == origins.end()) {
+            setHighlight(objT, false, false);
+        }
+    }
+    bool scroll = true;
+    for (const auto& objT : origins) {
+        bool isNew = std::ranges::find(elementOrigins, objT) == elementOrigins.end();
+        if (force || isNew) {
+            setHighlight(objT, true, isNew && scroll);
+        }
+        if (isNew) {
+            scroll = false;
+        }
+    }
+    elementOrigins = std::move(origins);
 }
 
 void TreeWidget::onSelectionChanged(const SelectionChanges& msg)
@@ -5461,6 +5548,11 @@ void DocumentItem::slotRecomputedObject(const App::DocumentObject& obj)
 void DocumentItem::slotRecomputed(const App::Document&, const std::vector<App::DocumentObject*>& objs)
 {
     auto tree = getTree();
+    if (Selection().hasSelection() || !tree->elementOrigins.empty()) {
+        // Refresh the origin highlight once the items are updated
+        tree->selectionHintsDirty = true;
+        tree->_updateStatus();
+    }
     for (auto obj : objs) {
         if (!obj->isValid()) {
             tree->ChangedObjects[obj].set(TreeWidget::CS_Error);
@@ -6028,15 +6120,9 @@ void DocumentItem::populateParents(const ViewProvider* vp, ViewParentMap& parent
     }
 }
 
-void DocumentItem::selectAllInstances(const ViewProviderDocumentObject& vpd)
+void DocumentItem::populateAllInstances(const ViewProviderDocumentObject& vpd)
 {
     ViewParentMap parentMap;
-    auto pObject = vpd.getObject();
-    if (!ObjectMap.contains(pObject)) {
-        return;
-    }
-
-    bool lock = getTree()->blockSelection(true);
 
     // We are trying to select all items corresponding to a given view
     // provider, i.e. all appearance of the object inside all its parent items
@@ -6058,6 +6144,18 @@ void DocumentItem::selectAllInstances(const ViewProviderDocumentObject& vpd)
     // now make sure all parent items are populated. In order to do that, we
     // need to populate the oldest parent first
     populateParents(&vpd, parentMap);
+}
+
+void DocumentItem::selectAllInstances(const ViewProviderDocumentObject& vpd)
+{
+    auto pObject = vpd.getObject();
+    if (!ObjectMap.contains(pObject)) {
+        return;
+    }
+
+    bool lock = getTree()->blockSelection(true);
+
+    populateAllInstances(vpd);
 
     DocumentObjectItem* first = nullptr;
     FOREACH_ITEM(item, vpd);
@@ -6072,6 +6170,32 @@ void DocumentItem::selectAllInstances(const ViewProviderDocumentObject& vpd)
         // updateSelection();  // commented out - it was incorrectly deselecting
         // ...newly selected items because their qt selection state wasn't
         // ...yet synchronized when updateItemSelection() checked them
+    }
+}
+
+void DocumentItem::setElementOriginHighlight(
+    const ViewProviderDocumentObject& vpd,
+    bool set,
+    bool scroll
+)
+{
+    if (!ObjectMap.contains(vpd.getObject())) {
+        return;
+    }
+    if (set) {
+        populateAllInstances(vpd);
+    }
+
+    DocumentObjectItem* first = nullptr;
+    FOREACH_ITEM(item, vpd);
+    item->setHighlight(set, HighlightMode::ElementOrigin);
+    if (set && scroll && !first && showItem(item, false)) {
+        first = item;
+    }
+    END_FOREACH_ITEM;
+
+    if (first) {
+        getTree()->scrollToItem(first);
     }
 }
 
@@ -6252,6 +6376,10 @@ void DocumentObjectItem::setHighlight(bool set, Gui::HighlightMode high)
             break;
         case HighlightMode::LightBlue:
             highlight(QColor(230, 230, 255));
+            break;
+        case HighlightMode::ElementOrigin:
+            // Semi-transparent, so that the text stays readable with any theme
+            highlight(QColor(255, 170, 0, 100));
             break;
         case HighlightMode::UserDefined: {
             QColor color(230, 230, 255);

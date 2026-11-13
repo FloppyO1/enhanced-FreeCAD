@@ -89,6 +89,8 @@ public:
 
     App::ElementNamePair getElementName(const char* name, ElementNameType type = Normal) const override;
 
+    App::DocumentObject* getElementOrigin(const char* element) const override;
+
     static std::list<Data::HistoryItem> getElementHistory(
         App::DocumentObject* obj,
         const char* name,

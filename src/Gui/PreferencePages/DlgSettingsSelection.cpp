@@ -52,6 +52,7 @@ void DlgSettingsSelection::saveSettings()
     ui->checkBoxPreselect->onSave();
     ui->checkBoxRecord->onSave();
     ui->checkBoxSelectionCheckBoxes->onSave();
+    ui->checkBoxElementOrigin->onSave();
 }
 
 void DlgSettingsSelection::loadSettings()
@@ -66,6 +67,7 @@ void DlgSettingsSelection::loadSettings()
     ui->checkBoxPreselect->onRestore();
     ui->checkBoxRecord->onRestore();
     ui->checkBoxSelectionCheckBoxes->onRestore();
+    ui->checkBoxElementOrigin->onRestore();
 }
 
 void DlgSettingsSelection::changeEvent(QEvent* e)
