@@ -1661,6 +1661,18 @@ bool SketchObject::deriveConstraintsForPieces(
         case DistanceY:
         case Coincident:
         case PointOnObject: {
+            if (con->Type == Distance && con->FirstPos == PointPos::none
+                && con->SecondPos == PointPos::none && con->Second != GeoEnum::GeoUndef) {
+                // Curve-to-curve distance (e.g. circle-circle): every piece lies on the same
+                // underlying curve, so keep it on the first piece. Only substitute the index:
+                // swapping First/Second would invert the meaning of the stored Orientation
+                // (e.g. Internal/External of a circle-circle distance).
+                Constraint* trans = con->copy();
+                trans->substituteIndex(oldId, newIds.front());
+                newConstraints.push_back(trans);
+                return true;
+            }
+
             if (con->FirstPos == PointPos::none && con->SecondPos == PointPos::none
                 && newIds.size() > 1) {
                 Constraint* dist = con->copy();

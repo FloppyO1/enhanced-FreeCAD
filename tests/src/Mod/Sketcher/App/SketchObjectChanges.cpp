@@ -1200,6 +1200,62 @@ TEST_F(SketchObjectTest, testTrimEndEffectOnUnrelatedTangent)
     EXPECT_TRUE(solverUpdated);
 }
 
+TEST_F(SketchObjectTest, testTrimCircleKeepsCircleToCircleDistance)
+{
+    // A circle-circle distance on a trimmed circle must keep its element order, otherwise the
+    // stored Internal/External orientation flips and the solver shrinks the arc.
+
+    // Arrange
+    Part::GeomCircle innerCircle;
+    innerCircle.setCenter(Base::Vector3d {0.0, 0.0, 0.0});
+    innerCircle.setRadius(7.5);
+    int geoIdInner = getObject()->addGeometry(&innerCircle);
+    Part::GeomLineSegment lineCut1;
+    lineCut1.setPoints(Base::Vector3d {-3.0, 0.0, 0.0}, Base::Vector3d {-3.0, 30.0, 0.0});
+    getObject()->addGeometry(&lineCut1);
+    Part::GeomLineSegment lineCut2;
+    lineCut2.setPoints(Base::Vector3d {3.0, 0.0, 0.0}, Base::Vector3d {3.0, 30.0, 0.0});
+    getObject()->addGeometry(&lineCut2);
+    Part::GeomCircle outerCircle;
+    outerCircle.setCenter(Base::Vector3d {0.0, 0.0, 0.0});
+    outerCircle.setRadius(12.5);
+    int geoIdOuter = getObject()->addGeometry(&outerCircle);
+    auto constraint = new Sketcher::Constraint();  // Ownership will be transferred to the sketch
+    constraint->Type = Sketcher::ConstraintType::Distance;
+    constraint->First = geoIdOuter;
+    constraint->FirstPos = Sketcher::PointPos::none;
+    constraint->Second = geoIdInner;
+    constraint->SecondPos = Sketcher::PointPos::none;
+    constraint->setValue(5.0);
+    getObject()->addConstraint(constraint);
+    Base::Vector3d trimPoint(-1.5, std::sqrt(12.5 * 12.5 - 1.5 * 1.5), 0.0);
+
+    // Force recomputes
+    getObject()->noRecomputes = true;
+
+    // Act
+    const auto result = getObject()->trim(geoIdOuter, trimPoint);
+
+    // Assert
+    EXPECT_EQ(result, SketchSolveStatus::Success);
+    const auto& constraints = getObject()->Constraints.getValues();
+    auto distIt = std::ranges::find(
+        constraints,
+        Sketcher::ConstraintType::Distance,
+        &Sketcher::Constraint::Type
+    );
+    ASSERT_NE(distIt, constraints.end());
+    EXPECT_EQ((*distIt)->First, geoIdOuter);
+    EXPECT_EQ((*distIt)->Second, geoIdInner);
+    EXPECT_TRUE((*distIt)->Orientation.testFlag(Sketcher::ConstraintOrientations::External));
+    auto* arc = getObject()->getGeometry<Part::GeomArcOfCircle>(geoIdOuter);
+    ASSERT_NE(arc, nullptr);
+    EXPECT_NEAR(arc->getRadius(), 12.5, 1e-6);
+    auto* inner = getObject()->getGeometry<Part::GeomCircle>(geoIdInner);
+    ASSERT_NE(inner, nullptr);
+    EXPECT_NEAR(inner->getRadius(), 7.5, 1e-6);
+}
+
 // TODO: Ensure endpoint constraints go to the appropriate new geometry
 // This will need a reliable way to get the resultant curves after the trim
 TEST_F(SketchObjectTest, testModifyKnotMultInNonPeriodicBSplineToZero)
