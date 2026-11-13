@@ -4519,6 +4519,14 @@ orizzontale nella console di Python</translation>
   <context>
     <name>Gui::Dialog::DlgSettingsSelection</name>
     <message>
+      <source>Highlight the feature that created the selected face, edge or vertex</source>
+      <translation>Evidenzia la feature che ha creato la faccia, lo spigolo o il vertice selezionato</translation>
+    </message>
+    <message>
+      <source>When a sub-element is selected in the 3D view, the tree item of the object that created it is highlighted, using the topological naming history.</source>
+      <translation>Quando si seleziona un sottoelemento nella vista 3D, nella vista ad albero viene evidenziato l'oggetto che lo ha creato, usando la storia della denominazione topologica.</translation>
+    </message>
+    <message>
       <location filename="../PreferencePages/DlgSettingsSelection.ui" line="14"/>
       <source>Selection</source>
       <translation>Selezione</translation>
