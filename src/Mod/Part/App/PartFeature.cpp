@@ -626,14 +626,27 @@ App::DocumentObject* Feature::getElementOrigin(const char* element) const
     auto self = const_cast<Feature*>(this);
     auto history = getElementHistory(self, element, true, true);
     App::DocumentObject* origin = self;
+    if (history.empty()) {
+        return origin;
+    }
+    // The element can only come from an object this one depends on. Element maps
+    // with ambiguous names may point to an unrelated object. The dependencies are
+    // collected once: checking each object with isInOutListRecursive() walks every
+    // path of the graph, which takes too long in a body with many features.
+    std::set<App::DocumentObject*> dependencies;
+    try {
+        auto outList = self->getOutListRecursive();
+        dependencies.insert(outList.begin(), outList.end());
+    }
+    catch (const Base::Exception&) {
+        return origin;
+    }
     int dimension = shapeDimension(self);
     for (const auto& item : history) {
         if (!item.obj || shapeDimension(item.obj) < dimension) {
             break;
         }
-        // The element can only come from an object this one depends on. Element maps
-        // with ambiguous names may point to an unrelated object: stop there.
-        if (item.obj != self && !self->isInOutListRecursive(item.obj)) {
+        if (item.obj != self && !dependencies.contains(item.obj)) {
             break;
         }
         origin = item.obj;
