@@ -30,7 +30,6 @@
 #include <BRepAlgo.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
-#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
@@ -73,7 +72,7 @@ static App::DocumentObjectExecReturn* validateParameters(
     double angle
 );
 
-// Triangular prism of the chamfer, for the boolean fallback (see makeDressUpByBoolean)
+// Tool of the chamfer, for the boolean fallback (see makeDressUpByBoolean)
 static TopoDS_Shape makeChamferTool(
     const DressUpCorner& corner,
     int chamferType,
@@ -121,18 +120,21 @@ static TopoDS_Shape makeChamferTool(
     }
 
     const gp_Vec bisector = gp_Vec(gp_Dir(gp_Vec(corner.u1) + gp_Vec(corner.u2)));
-    const gp_Vec dir(corner.dir);
+    // convex edges: extend past the ends (the tool cuts only air there)
     const double ext = corner.convex ? 0.1 * std::max(d1, d2) : 0.0;
-    const gp_Pnt p = corner.start.Translated(-dir * ext);
+    const gp_Pnt p = corner.start;
     // move the corner out of the wedge, so that the tool overlaps the faces
     const gp_Pnt outer = p.Translated(-bisector * (0.1 * std::min(d1, d2)));
     const gp_Pnt a1 = p.Translated(gp_Vec(corner.u1) * d1);
     const gp_Pnt a2 = p.Translated(gp_Vec(corner.u2) * d2);
 
+    // triangular section at the start, swept along the edge (prism or revolution)
     BRepBuilderAPI_MakePolygon polygon(outer, a1, a2, Standard_True);
     BRepBuilderAPI_MakeFace face(polygon.Wire(), Standard_True);
-    BRepPrimAPI_MakePrism prism(face.Face(), dir * (corner.length + 2 * ext));
-    return prism.Shape();
+    if (!face.IsDone()) {
+        return {};
+    }
+    return sweepDressUpProfile(corner, face.Face(), ext);
 }
 
 Chamfer::Chamfer()

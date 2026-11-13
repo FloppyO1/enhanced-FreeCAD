@@ -416,6 +416,161 @@ class TestChamfer(unittest.TestCase):
         )
         self.assertAlmostEqual(chamfer.Shape.Volume, groove.Shape.Volume - 10 * 90, places=4)
 
+    def _make_half_hole_step(self, body, height, z, seam, refine=None):
+        # the 20 x 20 x 20 step block (x > 10, z > 10 removed) with a radius 3 hole whose
+        # vertical axis (10, 10) lies on the wall of the step: the hole is open on the side of
+        # the upper part. The cylinder is turned by seam degrees around its axis.
+        box = body.newObject("PartDesign::AdditiveBox", "Box")
+        box.Length, box.Width, box.Height = 20, 20, 20
+        step = body.newObject("PartDesign::SubtractiveBox", "Step")
+        step.Length, step.Width, step.Height = 10, 20, 10
+        step.Placement.Base = FreeCAD.Vector(10, 0, 10)
+        hole = body.newObject("PartDesign::SubtractiveCylinder", "Hole")
+        hole.Radius, hole.Height = 3, height
+        hole.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(10, 10, z), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), seam)
+        )
+        if refine is not None:
+            for feature in (box, step, hole):
+                feature.Refine = refine
+        self.Doc.recompute()
+        self.assertEqual(len(hole.Shape.Solids), 1)
+        return hole
+
+    def _circle_names(self, shape, radius, z, side=None):
+        # circular edges of the given radius at height z, on the side x > 10 (side 1) or
+        # x < 10 (side -1) of the step wall
+        names = []
+        for index, edge in enumerate(shape.Edges):
+            curve = edge.Curve
+            if (
+                "Circle" in str(curve)
+                and abs(curve.Radius - radius) < 1e-9
+                and abs(curve.Center.z - z) < 1e-9
+            ):
+                mid = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2)
+                if side is None or (mid.x - 10) * side > 0:
+                    names.append("Edge" + str(index + 1))
+        self.assertTrue(names)
+        return names
+
+    def _assert_occ_fails_on(self, base, names, make):
+        self._assert_occ_fails(lambda: make(base.Shape, [base.Shape.getElement(n) for n in names]))
+
+    def _ring(self, r, rho, angle):
+        # Pappus: section of the chamfer of size r turned by angle, its centroid at rho from the
+        # axis (for a straight edge, angle is the length and rho 1)
+        return (r**2 / 2) * angle * rho
+
+    def _offset(self, r):
+        # distance of the centroid of the section from its corner, along each face
+        return r / 3
+
+    def _dress_up(self, base, names, r):
+        body = base.getParentGeoFeatureGroup()
+        feature = body.newObject("PartDesign::Chamfer", "Chamfer")
+        feature.Base = (base, names)
+        feature.Size = r
+        self.Doc.recompute()
+        self._assert_valid_single_solid(feature)
+        return feature
+
+    def testChamferHalfHoleOnStep(self):
+        # through hole on the step wall, seam of the cylinder at the end of the arc that the
+        # hole leaves on the step top (z = 10, x > 10): OCC fails even at size 1. The boolean
+        # fallback revolves the section around the axis and cuts it.
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        hole = self._make_half_hole_step(body, 30, -5, 90)
+        names = self._circle_names(hole.Shape, 3, 10, 1)
+        self.assertEqual(len(names), 1)
+        self._assert_occ_fails_on(hole, names, lambda s, e: s.makeChamfer(1, e))
+        for r in (1.0, 3.0):
+            feature = self._dress_up(hole, names, r)
+            removed = hole.Shape.Volume - feature.Shape.Volume
+            expected = self._ring(r, 3 + self._offset(r), math.pi)
+            self.assertLess(abs(removed - expected) / expected, 1e-6)
+            self._assert_inside_envelope(feature.Shape, hole.Shape)
+            feature.invalidatePreview()
+            feature.updatePreview()
+            self.assertGreater(len(feature.PreviewShape.Faces), 0)
+
+    def testChamferHalfHoleInLowerPart(self):
+        # the hole only goes through the lower part: its rim on the step top is split in two
+        # quarter arcs by the seam, the circle continues tangentially under the upper part
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        hole = self._make_half_hole_step(body, 10, 0, 0)
+        names = self._circle_names(hole.Shape, 3, 10, 1)
+        self.assertEqual(len(names), 2)
+        self._assert_occ_fails_on(hole, names, lambda s, e: s.makeChamfer(3, e))
+        feature = self._dress_up(hole, names, 3.0)
+        removed = hole.Shape.Volume - feature.Shape.Volume
+        expected = self._ring(3.0, 3 + self._offset(3.0), math.pi)
+        self.assertLess(abs(removed - expected) / expected, 1e-6)
+        # the material under the upper part (x < 10) is untouched
+        import Part
+
+        under = Part.makeBox(10, 20, 10)
+        self.assertAlmostEqual(
+            feature.Shape.common(under).Volume, hole.Shape.common(under).Volume, places=6
+        )
+
+    def testChamferHalfHoleFloor(self):
+        # blind half hole in the upper part, without refine: OCC fails on the concave arc at
+        # its floor. The fallback fuses the revolved section inside the hole, also with the
+        # size equal to the radius of the hole (the section reaches the axis).
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        hole = self._make_half_hole_step(body, 10, 10, 0, refine=False)
+        names = self._circle_names(hole.Shape, 3, 10, -1)
+        self.assertEqual(len(names), 1)
+        self._assert_occ_fails_on(hole, names, lambda s, e: s.makeChamfer(1, e))
+        for r in (1.0, 3.0):
+            feature = self._dress_up(hole, names, r)
+            added = feature.Shape.Volume - hole.Shape.Volume
+            expected = self._ring(r, 3 - self._offset(r), math.pi)
+            self.assertLess(abs(added - expected) / expected, 1e-6)
+            self._assert_inside_envelope(feature.Shape, hole.Shape)
+
+    def testChamferArcCircleAndLine(self):
+        # one feature on the half hole arc (OCC fails), the full rim of a small hole and a
+        # straight edge of the step top: all made by the fallback
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        self._make_half_hole_step(body, 30, -5, 90)
+        small = body.newObject("PartDesign::SubtractiveCylinder", "SmallHole")
+        small.Radius, small.Height = 1, 10
+        small.Placement.Base = FreeCAD.Vector(15, 16.5, 0)
+        self.Doc.recompute()
+        shape = small.Shape
+        names = (
+            self._circle_names(shape, 3, 10, 1)
+            + self._circle_names(shape, 1, 10)
+            + [self._edge_name(shape, (20, 0, 10), (20, 20, 10))]
+        )
+        r = 1.5
+        feature = self._dress_up(small, names, r)
+        removed = small.Shape.Volume - feature.Shape.Volume
+        expected = (
+            self._ring(r, 3 + self._offset(r), math.pi)
+            + self._ring(r, 1 + self._offset(r), 2 * math.pi)
+            + self._ring(r, 1, 20)
+        )
+        self.assertLess(abs(removed - expected) / expected, 1e-6)
+
+    def testChamferUpToOnArc(self):
+        # the vertex (10, 0, 10) is 7 from the rim of the half hole on the step top
+        body = self.Doc.addObject("PartDesign::Body", "Body")
+        hole = self._make_half_hole_step(body, 30, -5, 90)
+        names = self._circle_names(hole.Shape, 3, 10, 1)
+        feature = body.newObject("PartDesign::Chamfer", "Chamfer")
+        feature.Base = (hole, names)
+        feature.SizeMode = "UpTo"
+        feature.UpToReferences = [(hole, self._vertex_name(hole.Shape, (10, 0, 10)))]
+        self.Doc.recompute()
+        self._assert_valid_single_solid(feature)
+        self.assertAlmostEqual(feature.Size.Value, 7, places=6)
+        removed = hole.Shape.Volume - feature.Shape.Volume
+        expected = self._ring(7, 3 + self._offset(7), math.pi)
+        self.assertLess(abs(removed - expected) / expected, 1e-6)
+
     def tearDown(self):
         # closing doc
         FreeCAD.closeDocument("PartDesignTestChamfer")

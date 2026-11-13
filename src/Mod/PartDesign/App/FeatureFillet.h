@@ -28,6 +28,7 @@
 #include <functional>
 #include <limits>
 
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <TopLoc_Location.hxx>
@@ -41,14 +42,23 @@
 namespace PartDesign
 {
 
-/// Straight edge between two planar faces, as seen by the boolean fallback of fillet/chamfer
+/** Edge as seen by the boolean fallback of fillet/chamfer: a straight edge between two planar
+ * faces, or a circular edge (arc or full circle) between a planar face and a cylindrical face
+ * whose axis is the axis of the circle (normal to the plane)
+ */
 struct DressUpCorner
 {
     gp_Pnt start;     ///< first point of the edge
-    gp_Dir dir;       ///< direction of the edge
+    gp_Dir dir;       ///< direction of the edge (tangent at the start for a circular edge)
     double length;    ///< length of the edge
-    gp_Dir u1, u2;    ///< directions inside the first/second face, normal to the edge
+    gp_Dir u1, u2;    ///< directions inside the first/second face, normal to the edge at start
     bool convex;      ///< true: material between u1 and u2 (cut); false: empty (fuse)
+    bool circular = false;  ///< true: circular edge, the section turns around the axis
+    /// circular edge: center and axis of the circle (the edge turns counterclockwise around
+    /// it from start), X direction toward start
+    gp_Ax2 circle;
+    double radius = 0;  ///< circular edge: radius of the circle
+    double sweep = 0;   ///< circular edge: angle of the arc (2 pi for a full circle)
     /// largest distance along u1/u2 that the tool may cover on the first/second face, set when
     /// that face is bounded by a curved face that clipping cannot handle (infinite otherwise)
     double limit1 = std::numeric_limits<double>::infinity();
@@ -58,14 +68,29 @@ struct DressUpCorner
     /** Factor (<= 1) by which to scale a tool covering @a d1 along u1 and @a d2 along u2, so
      * that it stays inside limit1/limit2 with a small safety margin */
     double sizeFactor(double d1, double d2) const;
+
+    /** Position of @a p relative to the edge: @a along is the distance along the edge from
+     * start (arc length for a circular edge), @a d1 and @a d2 are the components along u1 and
+     * u2 of the offset of @a p from the edge, in the section through @a p (for a circular edge
+     * the section is the half plane through the axis, brought back to the one at start)
+     */
+    void locate(const gp_Pnt& p, double& along, double& d1, double& d2) const;
 };
 
+/** Solid swept by the planar @a profile of the tool of @a corner, drawn in the section at
+ * corner.start: a prism along a straight edge, a revolution around the axis of a circular edge.
+ * The sweep goes @a ext beyond both ends of the edge (not around a full circle). Returns a null
+ * shape if the profile crosses the axis of a circular edge.
+ */
+TopoDS_Shape sweepDressUpProfile(const DressUpCorner& corner, const TopoDS_Shape& profile, double ext);
+
 /** Fallback for fillet/chamfer when OCC fails: the tool built by @a makeTool for each edge
- * (a prism in the wedge between u1 and u2) is cut from the solid for convex edges and fused
+ * (swept along the edge in the wedge between u1 and u2) is cut from the solid for convex edges and fused
  * for concave edges. Each tool is first clipped to the solid's envelope by the planes of the
  * planar faces next to the two faces of the edge (see clipPlanes), so that a fused tool never
- * sticks out of the solid and a cut tool never digs into a floor at the end of the edge. Returns a null shape if an edge is not supported (not a straight edge
- * between two planar faces) or if the result is not valid.
+ * sticks out of the solid and a cut tool never digs into a floor at the end of the edge.
+ * Returns a null shape if an edge is not supported (see DressUpCorner) or if the result is not
+ * valid.
  */
 Part::TopoShape makeDressUpByBoolean(
     const Part::TopoShape& base,
@@ -85,9 +110,10 @@ std::vector<Part::TopoShape> getUpToReferenceShapes(
     const TopLoc_Location& baseLocation
 );
 
-/** Size of a fillet/chamfer in "Up to" mode: for each edge (straight, between two planar faces)
- * and each of its two faces, the distance from the edge to the nearest reference, measured in the
- * face perpendicular to the edge (references that give no positive distance are ignored). The
+/** Size of a fillet/chamfer in "Up to" mode: for each supported edge (see DressUpCorner) and
+ * each of its two faces, the distance from the edge to the nearest reference, measured in the
+ * face perpendicular to the edge (radially on the plane of a circular edge, along the axis on
+ * its cylinder) (references that give no positive distance are ignored). The
  * smallest distance d of an edge is converted by @a toSize(corner, d) and the smallest size over
  * all edges is returned. Throws Base::ValueError if no reference gives a distance.
  */

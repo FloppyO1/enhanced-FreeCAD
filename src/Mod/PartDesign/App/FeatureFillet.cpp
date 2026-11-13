@@ -31,8 +31,16 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgo.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <GC_MakeArcOfCircle.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Trsf.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -72,7 +80,83 @@ using namespace PartDesign;
 namespace
 {
 
-// Fills @a corner for a straight edge between two planar faces of @a base
+// Outward normal of @a face at the parameter @a t of its boundary @a edge
+bool faceNormalAt(const TopoDS_Face& face, const TopoDS_Edge& edge, double t, gp_Dir& normal)
+{
+    double first, last;
+    Handle(Geom2d_Curve) pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+    if (pcurve.IsNull()) {
+        return false;
+    }
+    const gp_Pnt2d uv = pcurve->Value(t);
+    BRepAdaptor_Surface surface(face);
+    gp_Pnt point;
+    gp_Vec du, dv;
+    surface.D1(uv.X(), uv.Y(), point, du, dv);
+    const gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < Precision::Confusion()) {
+        return false;
+    }
+    normal = gp_Dir(n);
+    if (face.Orientation() == TopAbs_REVERSED) {
+        normal.Reverse();
+    }
+    return true;
+}
+
+/* Checks that the circle of @a curve is the junction of the planar face and the cylindrical
+ * face in @a faces (cylinder axis = circle axis, same radius) and fills the circular fields of
+ * @a corner
+ */
+bool analyseCircle(
+    const BRepAdaptor_Curve& curve,
+    const std::vector<TopoDS_Shape>& faces,
+    DressUpCorner& corner
+)
+{
+    constexpr double angularTol = 1e-9;
+    const double tol = Precision::Confusion();
+    const gp_Circ circ = curve.Circle();
+    const gp_Dir axis = circ.Axis().Direction();
+    int planes = 0;
+    int cylinders = 0;
+    for (const auto& faceShape : faces) {
+        BRepAdaptor_Surface surface(TopoDS::Face(faceShape));
+        if (surface.GetType() == GeomAbs_Plane) {
+            if (std::abs(surface.Plane().Axis().Direction().Dot(axis)) < 1 - angularTol) {
+                return false;
+            }
+            ++planes;
+        }
+        else if (surface.GetType() == GeomAbs_Cylinder) {
+            const gp_Cylinder cylinder = surface.Cylinder();
+            if (std::abs(cylinder.Axis().Direction().Dot(axis)) < 1 - angularTol
+                || gp_Lin(cylinder.Axis()).Distance(circ.Location()) > tol
+                || std::abs(cylinder.Radius() - circ.Radius()) > tol) {
+                return false;
+            }
+            ++cylinders;
+        }
+    }
+    if (planes != 1 || cylinders != 1) {
+        return false;
+    }
+    corner.circular = true;
+    corner.radius = circ.Radius();
+    corner.sweep = curve.LastParameter() - curve.FirstParameter();
+    if (corner.radius < tol || corner.sweep < Precision::Angular()
+        || corner.sweep > 2 * std::numbers::pi + Precision::Angular()) {
+        return false;
+    }
+    // the parameter of a circle turns counterclockwise around its axis
+    corner.circle = gp_Ax2(circ.Location(), axis, gp_Vec(circ.Location(), corner.start));
+    corner.length = corner.radius * corner.sweep;
+    return true;
+}
+
+/* Fills @a corner for a straight edge between two planar faces of @a base, or a circular edge
+ * between a planar face and a cylindrical face around the axis of the circle
+ */
 bool analyseCorner(const TopoShape& base, const TopoShape& edge, DressUpCorner& corner)
 {
     if (edge.isNull() || edge.getShape().ShapeType() != TopAbs_EDGE) {
@@ -80,32 +164,53 @@ bool analyseCorner(const TopoShape& base, const TopoShape& edge, DressUpCorner& 
     }
     const TopoDS_Edge& e = TopoDS::Edge(edge.getShape());
     BRepAdaptor_Curve curve(e);
-    if (curve.GetType() != GeomAbs_Line) {
+    if (curve.GetType() != GeomAbs_Line && curve.GetType() != GeomAbs_Circle) {
         return false;
     }
     auto faces = base.findAncestorsShapes(e, TopAbs_FACE);
     if (faces.size() != 2) {
         return false;
     }
-    corner.start = curve.Value(curve.FirstParameter());
-    corner.length = curve.LastParameter() - curve.FirstParameter();
-    if (corner.length < Precision::Confusion()) {
+    const double first = curve.FirstParameter();
+    gp_Vec startTangent;
+    curve.D1(first, corner.start, startTangent);
+    if (startTangent.Magnitude() < Precision::Confusion()) {
         return false;
     }
-    const gp_Dir lineDir = curve.Line().Direction();
+    const gp_Dir lineDir(startTangent);
     corner.dir = lineDir;
+    if (curve.GetType() == GeomAbs_Line) {
+        corner.length = curve.LastParameter() - first;
+        if (corner.length < Precision::Confusion()) {
+            return false;
+        }
+    }
+    else {
+        if (!analyseCircle(curve, faces, corner)) {
+            return false;
+        }
+    }
 
     gp_Dir normals[2];
     gp_Dir inFace[2];
     for (int i = 0; i < 2; ++i) {
         const TopoDS_Face& face = TopoDS::Face(faces[i]);
-        BRepAdaptor_Surface surface(face);
-        if (surface.GetType() != GeomAbs_Plane) {
-            return false;
+        gp_Dir normal;
+        if (corner.circular) {
+            // normal at the start, in the section through the axis
+            if (!faceNormalAt(face, e, first, normal)) {
+                return false;
+            }
         }
-        gp_Dir normal = surface.Plane().Axis().Direction();
-        if (face.Orientation() == TopAbs_REVERSED) {
-            normal.Reverse();
+        else {
+            BRepAdaptor_Surface surface(face);
+            if (surface.GetType() != GeomAbs_Plane) {
+                return false;
+            }
+            normal = surface.Plane().Axis().Direction();
+            if (face.Orientation() == TopAbs_REVERSED) {
+                normal.Reverse();
+            }
         }
         // orientation of the edge in the face (already composed with the face orientation)
         int found = 0;
@@ -151,14 +256,9 @@ bool planeOf(const TopoDS_Face& face, gp_Pnt& origin, gp_Dir& normal)
     return true;
 }
 
-// Direction inside the planar @a face, normal to @a edge at its middle point
+// Direction inside @a face, normal to its boundary @a edge at the middle point of the edge
 bool inFaceDirection(const TopoDS_Face& face, const TopoDS_Edge& edge, gp_Pnt& mid, gp_Dir& dir)
 {
-    gp_Pnt origin;
-    gp_Dir normal;
-    if (!planeOf(face, origin, normal)) {
-        return false;
-    }
     TopAbs_Orientation orientation = TopAbs_INTERNAL;
     for (TopExp_Explorer xp(face, TopAbs_EDGE); xp.More(); xp.Next()) {
         if (xp.Current().IsSame(edge)) {
@@ -172,9 +272,11 @@ bool inFaceDirection(const TopoDS_Face& face, const TopoDS_Edge& edge, gp_Pnt& m
         return false;
     }
     BRepAdaptor_Curve curve(edge);
+    const double t = (curve.FirstParameter() + curve.LastParameter()) / 2;
     gp_Vec tangent;
-    curve.D1((curve.FirstParameter() + curve.LastParameter()) / 2, mid, tangent);
-    if (tangent.Magnitude() < Precision::Confusion()) {
+    curve.D1(t, mid, tangent);
+    gp_Dir normal;
+    if (tangent.Magnitude() < Precision::Confusion() || !faceNormalAt(face, edge, t, normal)) {
         return false;
     }
     if (orientation == TopAbs_REVERSED) {
@@ -310,13 +412,7 @@ void curvedBoundaryLimits(const TopoShape& base, const TopoDS_Edge& edge, DressU
     }
     for (int i = 0; i < 2; ++i) {
         const TopoDS_Face& face = TopoDS::Face(faces[i]);
-        const gp_Vec u(i == 0 ? corner.u1 : corner.u2);
         double& limit = i == 0 ? corner.limit1 : corner.limit2;
-        gp_Pnt origin;
-        gp_Dir faceNormal;
-        if (!planeOf(face, origin, faceNormal)) {
-            continue;
-        }
         for (TopExp_Explorer xp(face, TopAbs_EDGE); xp.More(); xp.Next()) {
             const TopoDS_Edge& other = TopoDS::Edge(xp.Current());
             if (other.IsSame(edge) || BRep_Tool::Degenerated(other)
@@ -344,11 +440,13 @@ void curvedBoundaryLimits(const TopoShape& base, const TopoDS_Edge& edge, DressU
                     gp_Pnt p;
                     gp_Vec tangent;
                     curve.D1(t, p, tangent);
-                    const gp_Vec rel(corner.start, p);
-                    const double along = rel.Dot(gp_Vec(corner.dir));
-                    const double dist = rel.Dot(u);
+                    double along, d1, d2;
+                    corner.locate(p, along, d1, d2);
+                    const double dist = i == 0 ? d1 : d2;
+                    gp_Dir faceNormal;
                     if (along <= tol || along >= corner.length - tol || dist <= tol
-                        || dist >= limit || tangent.Magnitude() < tol) {
+                        || dist >= limit || tangent.Magnitude() < tol
+                        || !faceNormalAt(face, other, t, faceNormal)) {
                         continue;
                     }
                     // direction into the face from the boundary
@@ -418,6 +516,85 @@ double DressUpCorner::sizeFactor(double d1, double d2) const
         factor = std::min(factor, margin * limit2 / d2);
     }
     return factor;
+}
+
+void DressUpCorner::locate(const gp_Pnt& p, double& along, double& d1, double& d2) const
+{
+    if (!circular) {
+        const gp_Vec rel(start, p);
+        along = rel.Dot(gp_Vec(dir));
+        d1 = rel.Dot(gp_Vec(u1));
+        d2 = rel.Dot(gp_Vec(u2));
+        return;
+    }
+    const gp_Vec v(circle.Location(), p);
+    const gp_Vec axis(circle.Direction());
+    const gp_Vec x(circle.XDirection());
+    const double h = v.Dot(axis);
+    const double px = v.Dot(x);
+    const double py = v.Dot(gp_Vec(circle.YDirection()));
+    double angle = std::atan2(py, px);
+    if (angle < 0) {
+        angle += 2 * std::numbers::pi;
+    }
+    along = angle * radius;
+    // offset in the section at start, where the radial direction is x
+    const gp_Vec rel = x * (std::hypot(px, py) - radius) + axis * h;
+    d1 = rel.Dot(gp_Vec(u1));
+    d2 = rel.Dot(gp_Vec(u2));
+}
+
+TopoDS_Shape PartDesign::sweepDressUpProfile(
+    const DressUpCorner& corner,
+    const TopoDS_Shape& profile,
+    double ext
+)
+{
+    if (profile.IsNull()) {
+        return {};
+    }
+    if (!corner.circular) {
+        gp_Trsf move;
+        move.SetTranslation(-gp_Vec(corner.dir) * ext);
+        BRepBuilderAPI_Transform moved(profile, move, Standard_True);
+        BRepPrimAPI_MakePrism prism(moved.Shape(), gp_Vec(corner.dir) * (corner.length + 2 * ext));
+        return prism.Shape();
+    }
+
+    // the profile must stay on the side of the axis where the edge is
+    const gp_Ax1 axis(corner.circle.Location(), corner.circle.Direction());
+    const gp_Vec radial(corner.circle.XDirection());
+    for (TopExp_Explorer xp(profile, TopAbs_EDGE); xp.More(); xp.Next()) {
+        BRepAdaptor_Curve curve(TopoDS::Edge(xp.Current()));
+        constexpr int samples = 16;
+        for (int k = 0; k <= samples; ++k) {
+            const double t = curve.FirstParameter()
+                + (curve.LastParameter() - curve.FirstParameter()) * k / samples;
+            if (gp_Vec(corner.circle.Location(), curve.Value(t)).Dot(radial)
+                < -Precision::Confusion()) {
+                return {};
+            }
+        }
+    }
+
+    constexpr double fullTurn = 2 * std::numbers::pi;
+    double extAngle = 0;
+    if (corner.sweep < fullTurn - Precision::Angular()) {
+        // arc length ext at the radius of the edge, without closing the turn
+        extAngle = std::min(ext / corner.radius, (fullTurn - corner.sweep) / 4);
+    }
+    gp_Trsf rotation;
+    rotation.SetRotation(axis, -extAngle);
+    BRepBuilderAPI_Transform rotated(profile, rotation, Standard_True);
+    BRepPrimAPI_MakeRevol revol(
+        rotated.Shape(),
+        axis,
+        std::min(corner.sweep + 2 * extAngle, fullTurn)
+    );
+    if (!revol.IsDone()) {
+        return {};
+    }
+    return revol.Shape();
 }
 
 bool PartDesign::isDressUpResultValid(const TopoShape& base, const TopoShape& shape)
@@ -493,16 +670,55 @@ double PartDesign::computeUpToSize(
         }
         supported = true;
         double nearest = std::numeric_limits<double>::infinity();
-        for (const gp_Dir& u : {corner.u1, corner.u2}) {
-            // plane through the edge, normal to the direction in the face: the distance of a
-            // point from it is its distance from the edge, measured in the face along u
-            const gp_Ax3 axes(corner.start, u);
-            BRepBuilderAPI_MakeFace plane(gp_Pln(axes), -extent, extent, -extent, extent);
-            if (!plane.IsDone()) {
+        for (int i = 0; i < 2; ++i) {
+            const gp_Dir& u = i == 0 ? corner.u1 : corner.u2;
+            // surface through the edge, normal to the direction in the face: the distance of a
+            // point from it is its distance from the edge, measured in the face along u. It is
+            // a plane, except for the radial direction of a circular edge (a cylinder).
+            TopoDS_Face surface;
+            if (!corner.circular) {
+                BRepBuilderAPI_MakeFace plane(
+                    gp_Pln(gp_Ax3(corner.start, u)),
+                    -extent,
+                    extent,
+                    -extent,
+                    extent
+                );
+                if (plane.IsDone()) {
+                    surface = plane.Face();
+                }
+            }
+            else if (std::abs(gp_Vec(u).Dot(gp_Vec(corner.circle.Direction()))) > 0.5) {
+                // along the axis, on the cylindrical face: plane of the circle
+                BRepBuilderAPI_MakeFace plane(
+                    gp_Pln(gp_Ax3(corner.circle.Location(), corner.circle.Direction())),
+                    -extent,
+                    extent,
+                    -extent,
+                    extent
+                );
+                if (plane.IsDone()) {
+                    surface = plane.Face();
+                }
+            }
+            else {
+                // radial, on the planar face: cylinder through the circle
+                BRepBuilderAPI_MakeFace cylinder(
+                    gp_Cylinder(gp_Ax3(corner.circle), corner.radius),
+                    0,
+                    2 * std::numbers::pi,
+                    -extent,
+                    extent
+                );
+                if (cylinder.IsDone()) {
+                    surface = cylinder.Face();
+                }
+            }
+            if (surface.IsNull()) {
                 continue;
             }
             for (const auto& reference : references) {
-                BRepExtrema_DistShapeShape extrema(plane.Face(), reference.getShape());
+                BRepExtrema_DistShapeShape extrema(surface, reference.getShape());
                 if (!extrema.IsDone() || extrema.NbSolution() < 1) {
                     continue;
                 }
@@ -510,8 +726,9 @@ double PartDesign::computeUpToSize(
                 if (distance <= tol) {
                     continue;  // the reference crosses or touches the plane
                 }
-                const gp_Pnt point = extrema.PointOnShape2(1);
-                if (gp_Vec(corner.start, point).Dot(gp_Vec(u)) <= 0) {
+                double along, d1, d2;
+                corner.locate(extrema.PointOnShape2(1), along, d1, d2);
+                if ((i == 0 ? d1 : d2) <= 0) {
                     continue;  // behind the edge, outside the face
                 }
                 nearest = std::min(nearest, distance);
@@ -522,7 +739,10 @@ double PartDesign::computeUpToSize(
         }
     }
     if (!supported) {
-        throw Base::ValueError("The 'Up to' mode needs straight edges between two planar faces");
+        throw Base::ValueError(
+            "The 'Up to' mode needs straight edges between two planar faces, or circular edges "
+            "between a planar face and a cylindrical face"
+        );
     }
     if (!std::isfinite(size) || size <= tol) {
         throw Base::ValueError("No 'Up to' reference lies beside the edges, in their adjacent faces");
@@ -586,6 +806,32 @@ TopoDS_Shape makeFilletTool(const DressUpCorner& corner, double radius)
     const gp_Vec dir(corner.dir);
     // convex edges: extend past the ends (the tool cuts only air there)
     const double ext = corner.convex ? 0.1 * radius : 0.0;
+    if (corner.circular) {
+        // section at the start, bounded by the arc, revolved around the axis
+        const gp_Pnt p = corner.start;
+        const gp_Pnt outer = p.Translated(-bisector * (0.1 * radius));
+        const gp_Pnt t1 = p.Translated(gp_Vec(corner.u1) * (radius / std::tan(half)));
+        const gp_Pnt t2 = p.Translated(gp_Vec(corner.u2) * (radius / std::tan(half)));
+        const gp_Pnt center = p.Translated(bisector * (radius / std::sin(half)));
+        const gp_Pnt mid = center.Translated(-bisector * radius);
+        GC_MakeArcOfCircle arc(t1, mid, t2);
+        if (!arc.IsDone()) {
+            return {};
+        }
+        BRepBuilderAPI_MakeWire wire(
+            BRepBuilderAPI_MakeEdge(outer, t1).Edge(),
+            BRepBuilderAPI_MakeEdge(arc.Value()).Edge(),
+            BRepBuilderAPI_MakeEdge(t2, outer).Edge()
+        );
+        if (!wire.IsDone()) {
+            return {};
+        }
+        BRepBuilderAPI_MakeFace face(wire.Wire(), Standard_True);
+        if (!face.IsDone()) {
+            return {};
+        }
+        return sweepDressUpProfile(corner, face.Face(), ext);
+    }
     const gp_Pnt p = corner.start.Translated(-dir * ext);
     // move the corner out of the wedge, so that the tool overlaps the faces
     const gp_Pnt outer = p.Translated(-bisector * (0.1 * radius));
