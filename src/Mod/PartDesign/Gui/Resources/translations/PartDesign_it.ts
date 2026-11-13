@@ -1649,6 +1649,40 @@ Se zero, è uguale a Raggio2</translation>
       <translation>Creato uno smusso vuoto!
 </translation>
     </message>
+    <message>
+      <source>Remove</source>
+      <translation>Rimuovi</translation>
+    </message>
+    <message>
+      <source>Select references</source>
+      <translation>Seleziona riferimenti</translation>
+    </message>
+    <message>
+      <source>Size mode</source>
+      <translation>Modalità dimensione</translation>
+    </message>
+    <message>
+      <source>Dimension: enter the size.
+   Up to: the size is computed so that the edge of the feature reaches the nearest reference</source>
+      <translation>Quota: inserire la dimensione.
+   Fino a: la dimensione viene calcolata in modo che il bordo della funzione raggiunga il riferimento più vicino</translation>
+    </message>
+    <message>
+      <source>Dimension</source>
+      <translation>Quota</translation>
+    </message>
+    <message>
+      <source>Up to</source>
+      <translation>Fino a</translation>
+    </message>
+    <message>
+      <source>Select faces, edges or vertices that the feature reaches; select a reference again to remove it</source>
+      <translation>Selezionare le facce, i bordi o i vertici che la funzione raggiunge; selezionare di nuovo un riferimento per rimuoverlo</translation>
+    </message>
+    <message>
+      <source>References reached by the feature, the nearest one sets the size</source>
+      <translation>Riferimenti raggiunti dalla funzione, il più vicino determina la dimensione</translation>
+    </message>
   </context>
   <context>
     <name>PartDesignGui::TaskDlgBooleanParameters</name>
@@ -1984,6 +2018,40 @@ Se zero, è uguale a Raggio2</translation>
       <location filename="../../TaskFilletParameters.cpp" line="205"/>
       <source>Empty fillet created!</source>
       <translation>Nessun raccordo creato!</translation>
+    </message>
+    <message>
+      <source>Remove</source>
+      <translation>Rimuovi</translation>
+    </message>
+    <message>
+      <source>Select references</source>
+      <translation>Seleziona riferimenti</translation>
+    </message>
+    <message>
+      <source>Size mode</source>
+      <translation>Modalità dimensione</translation>
+    </message>
+    <message>
+      <source>Dimension: enter the size.
+   Up to: the size is computed so that the edge of the feature reaches the nearest reference</source>
+      <translation>Quota: inserire la dimensione.
+   Fino a: la dimensione viene calcolata in modo che il bordo della funzione raggiunga il riferimento più vicino</translation>
+    </message>
+    <message>
+      <source>Dimension</source>
+      <translation>Quota</translation>
+    </message>
+    <message>
+      <source>Up to</source>
+      <translation>Fino a</translation>
+    </message>
+    <message>
+      <source>Select faces, edges or vertices that the feature reaches; select a reference again to remove it</source>
+      <translation>Selezionare le facce, i bordi o i vertici che la funzione raggiunge; selezionare di nuovo un riferimento per rimuoverlo</translation>
+    </message>
+    <message>
+      <source>References reached by the feature, the nearest one sets the size</source>
+      <translation>Riferimenti raggiunti dalla funzione, il più vicino determina la dimensione</translation>
     </message>
   </context>
   <context>
@@ -2722,6 +2790,10 @@ misurata lungo la direzione specificata</translation>
       <location filename="../../TaskPadPocketParameters.ui" line="788"/>
       <source>Recompute on change</source>
       <translation>Ricalcola dopo una modifica</translation>
+    </message>
+    <message>
+      <source>Reverse the offset direction</source>
+      <translation>Inverti la direzione dell'offset</translation>
     </message>
   </context>
   <context>

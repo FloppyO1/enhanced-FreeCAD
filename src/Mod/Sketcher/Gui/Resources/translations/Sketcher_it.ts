@@ -3192,6 +3192,30 @@ Questa impostazione è solo per la barra degli strumenti. Qualunque sia la scelt
       <source>Position and dimensions</source>
       <translation>Posizione e dimensioni</translation>
     </message>
+    <message>
+      <source>While drawing, new points snap to the vertices, edges and circle centers of the 3D model. The referenced element is imported as external geometry and constrained automatically.</source>
+      <translation>Durante il disegno, i nuovi punti si agganciano ai vertici, ai bordi e ai centri dei cerchi del modello 3D. L'elemento di riferimento viene importato come geometria esterna e vincolato automaticamente.</translation>
+    </message>
+    <message>
+      <source>Snap to model geometry</source>
+      <translation>Aggancia alla geometria del modello</translation>
+    </message>
+    <message>
+      <source>While drawing, the cursor position snaps onto the position that satisfies the suggested constraints (coincidence, point on object, horizontal, vertical, parallel, perpendicular, tangency, line extension) when it is within the snap distance. A marker shows the snapped position.</source>
+      <translation>Durante il disegno, la posizione del cursore si aggancia alla posizione che soddisfa i vincoli suggeriti (coincidenza, punto su oggetto, orizzontale, verticale, parallelo, perpendicolare, tangenza, prolungamento della linea) quando si trova entro la distanza di aggancio. Un indicatore mostra la posizione agganciata.</translation>
+    </message>
+    <message>
+      <source>Snap to suggested constraints within</source>
+      <translation>Aggancia ai vincoli suggeriti entro</translation>
+    </message>
+    <message>
+      <source>Distance on screen, in pixels, from which the cursor position snaps to suggested constraints</source>
+      <translation>Distanza sullo schermo, in pixel, entro cui la posizione del cursore si aggancia ai vincoli suggeriti</translation>
+    </message>
+    <message>
+      <source> px</source>
+      <translation> px</translation>
+    </message>
   </context>
   <context>
     <name>SketcherGui::SketcherSettingsDisplay</name>

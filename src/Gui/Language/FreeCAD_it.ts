@@ -4354,6 +4354,169 @@ orizzontale nella console di Python</translation>
     </message>
   </context>
   <context>
+    <name>Gui::Dialog::DlgSettingsRadialMenu</name>
+    <message>
+      <source>Search commands</source>
+      <translation>Cerca comandi</translation>
+    </message>
+    <message>
+      <source>Select command</source>
+      <translation>Seleziona comando</translation>
+    </message>
+    <message>
+      <source>Any</source>
+      <translation>Qualsiasi</translation>
+    </message>
+    <message>
+      <source>East</source>
+      <translation>Est</translation>
+    </message>
+    <message>
+      <source>Edge</source>
+      <translation>Bordo</translation>
+    </message>
+    <message>
+      <source>Edit mode</source>
+      <translation>Modalità modifica</translation>
+    </message>
+    <message>
+      <source>Empty space</source>
+      <translation>Spazio vuoto</translation>
+    </message>
+    <message>
+      <source>Face</source>
+      <translation>Faccia</translation>
+    </message>
+    <message>
+      <source>North</source>
+      <translation>Nord</translation>
+    </message>
+    <message>
+      <source>North-east</source>
+      <translation>Nord-est</translation>
+    </message>
+    <message>
+      <source>North-west</source>
+      <translation>Nord-ovest</translation>
+    </message>
+    <message>
+      <source>Object</source>
+      <translation>Oggetto</translation>
+    </message>
+    <message>
+      <source>South</source>
+      <translation>Sud</translation>
+    </message>
+    <message>
+      <source>South-east</source>
+      <translation>Sud-est</translation>
+    </message>
+    <message>
+      <source>South-west</source>
+      <translation>Sud-ovest</translation>
+    </message>
+    <message>
+      <source>Vertex</source>
+      <translation>Vertice</translation>
+    </message>
+    <message>
+      <source>West</source>
+      <translation>Ovest</translation>
+    </message>
+    <message>
+      <source>%1 (unavailable)</source>
+      <translation>%1 (non disponibile)</translation>
+    </message>
+    <message>
+      <source>(empty)</source>
+      <translation>(vuoto)</translation>
+    </message>
+    <message>
+      <source>Assign command...</source>
+      <translation>Assegna comando...</translation>
+    </message>
+    <message>
+      <source>Clear slot</source>
+      <translation>Svuota posizione</translation>
+    </message>
+    <message>
+      <source>Commands</source>
+      <translation>Comandi</translation>
+    </message>
+    <message>
+      <source>Commands of the removed slots are kept until you apply the settings.</source>
+      <translation>I comandi delle posizioni rimosse vengono mantenuti finché non si applicano le impostazioni.</translation>
+    </message>
+    <message>
+      <source>Context:</source>
+      <translation>Contesto:</translation>
+    </message>
+    <message>
+      <source>Customized for this workbench and context.</source>
+      <translation>Personalizzato per questo ambiente di lavoro e contesto.</translation>
+    </message>
+    <message>
+      <source>Drag distance before the menu appears:</source>
+      <translation>Distanza di trascinamento prima che appaia il menu:</translation>
+    </message>
+    <message>
+      <source>Enable the radial menu (right mouse button drag in the 3D view)</source>
+      <translation>Abilita il menu radiale (trascinamento con il tasto destro del mouse nella vista 3D)</translation>
+    </message>
+    <message>
+      <source>General</source>
+      <translation>Generale</translation>
+    </message>
+    <message>
+      <source>Global (all workbenches)</source>
+      <translation>Globale (tutti gli ambienti di lavoro)</translation>
+    </message>
+    <message>
+      <source>Move down</source>
+      <translation>Sposta in basso</translation>
+    </message>
+    <message>
+      <source>Move up</source>
+      <translation>Sposta verso l'alto</translation>
+    </message>
+    <message>
+      <source>Not customized: using the entries of the context menu of the 3D view.</source>
+      <translation>Non personalizzato: vengono usate le voci del menu contestuale della vista 3D.</translation>
+    </message>
+    <message>
+      <source>Not customized: using the global settings for this context.</source>
+      <translation>Non personalizzato: vengono usate le impostazioni globali per questo contesto.</translation>
+    </message>
+    <message>
+      <source>Not customized: using the settings of this workbench for any context.</source>
+      <translation>Non personalizzato: vengono usate le impostazioni di questo ambiente di lavoro per qualsiasi contesto.</translation>
+    </message>
+    <message>
+      <source>Number of commands:</source>
+      <translation>Numero di comandi:</translation>
+    </message>
+    <message>
+      <source>Radial Menu</source>
+      <translation>Menu radiale</translation>
+    </message>
+    <message>
+      <source>Reset to default</source>
+      <translation>Ripristina predefiniti</translation>
+    </message>
+    <message>
+      <source>Slot %1</source>
+      <translation>Posizione %1</translation>
+    </message>
+    <message>
+      <source>Slot %1 (north)</source>
+      <translation>Posizione %1 (nord)</translation>
+    </message>
+    <message>
+      <source>Workbench:</source>
+      <translation>Ambiente di lavoro:</translation>
+    </message>
+  </context>
+  <context>
     <name>Gui::Dialog::DlgSettingsSelection</name>
     <message>
       <location filename="../PreferencePages/DlgSettingsSelection.ui" line="14"/>
@@ -6912,6 +7075,241 @@ Uscire senza salvare tutti i dati?</translation>
       <location filename="../EditorView.cpp" line="970"/>
       <source>No results</source>
       <translation>Nessun risultato</translation>
+    </message>
+  </context>
+  <context>
+    <name>Gui::SectionView</name>
+    <message>
+      <source>Angle</source>
+      <translation>Angolo</translation>
+    </message>
+    <message>
+      <source>Appearance</source>
+      <translation>Aspetto</translation>
+    </message>
+    <message>
+      <source>Appearance of the cut faces</source>
+      <translation>Aspetto delle facce tagliate</translation>
+    </message>
+    <message>
+      <source>Axis</source>
+      <translation>Asse</translation>
+    </message>
+    <message>
+      <source>Clear references</source>
+      <translation>Cancella riferimenti</translation>
+    </message>
+    <message>
+      <source>Color of the hatch lines</source>
+      <translation>Colore delle linee del tratteggio</translation>
+    </message>
+    <message>
+      <source>Confirm</source>
+      <translation>Conferma</translation>
+    </message>
+    <message>
+      <source>Containing the axis</source>
+      <translation>Contenente l'asse</translation>
+    </message>
+    <message>
+      <source>Cross-hatch</source>
+      <translation>Tratteggio incrociato</translation>
+    </message>
+    <message>
+      <source>Distance of the plane from its reference along the normal</source>
+      <translation>Distanza del piano dal suo riferimento lungo la normale</translation>
+    </message>
+    <message>
+      <source>Esc: turn off the section. Enter: confirm.</source>
+      <translation>Esc: disattiva la sezione. Invio: conferma.</translation>
+    </message>
+    <message>
+      <source>Fill color</source>
+      <translation>Colore di riempimento</translation>
+    </message>
+    <message>
+      <source>Fill color of the cut faces</source>
+      <translation>Colore di riempimento delle facce tagliate</translation>
+    </message>
+    <message>
+      <source>Fill the cut area of visible solids with a hatch pattern</source>
+      <translation>Riempie l'area di taglio dei solidi visibili con un tratteggio</translation>
+    </message>
+    <message>
+      <source>Fill transparency</source>
+      <translation>Trasparenza del riempimento</translation>
+    </message>
+    <message>
+      <source>Hatch</source>
+      <translation>Tratteggio</translation>
+    </message>
+    <message>
+      <source>Hatch angle</source>
+      <translation>Angolo del tratteggio</translation>
+    </message>
+    <message>
+      <source>Keep the other side of the plane</source>
+      <translation>Mantiene l'altro lato del piano</translation>
+    </message>
+    <message>
+      <source>Line color</source>
+      <translation>Colore della linea</translation>
+    </message>
+    <message>
+      <source>Line width</source>
+      <translation>Spessore linea</translation>
+    </message>
+    <message>
+      <source>Lock the section: hide the panel, the arrow and the plane and keep only the cut model</source>
+      <translation>Blocca la sezione: nasconde il pannello, la freccia e il piano e mantiene solo il modello tagliato</translation>
+    </message>
+    <message>
+      <source>No reference selected: the plane stays where it is</source>
+      <translation>Nessun riferimento selezionato: il piano resta dov'è</translation>
+    </message>
+    <message>
+      <source>No reference: plane parallel to the screen, through the model center</source>
+      <translation>Nessun riferimento: piano parallelo allo schermo, passante per il centro del modello</translation>
+    </message>
+    <message>
+      <source>None</source>
+      <translation>Nessuno</translation>
+    </message>
+    <message>
+      <source>Offset</source>
+      <translation>Offset</translation>
+    </message>
+    <message>
+      <source>One vertex is not enough: select another vertex or a face…</source>
+      <translation>Un solo vertice non basta: selezionare un altro vertice o una faccia…</translation>
+    </message>
+    <message>
+      <source>Perpendicular to axis</source>
+      <translation>Perpendicolare all'asse</translation>
+    </message>
+    <message>
+      <source>Plane containing the axis and the second reference</source>
+      <translation>Piano contenente l'asse e il secondo riferimento</translation>
+    </message>
+    <message>
+      <source>Plane from the axis of the selected reference</source>
+      <translation>Piano ricavato dall'asse del riferimento selezionato</translation>
+    </message>
+    <message>
+      <source>Plane midway between the two parallel faces</source>
+      <translation>Piano a metà tra le due facce parallele</translation>
+    </message>
+    <message>
+      <source>Plane of the selected face</source>
+      <translation>Piano della faccia selezionata</translation>
+    </message>
+    <message>
+      <source>Plane parallel to the face, through the second reference</source>
+      <translation>Piano parallelo alla faccia, passante per il secondo riferimento</translation>
+    </message>
+    <message>
+      <source>Plane perpendicular to the axis through its center, or plane containing the axis</source>
+      <translation>Piano perpendicolare all'asse passante per il suo centro, oppure piano contenente l'asse</translation>
+    </message>
+    <message>
+      <source>Plane perpendicular to the segment, through its midpoint</source>
+      <translation>Piano perpendicolare al segmento, passante per il suo punto medio</translation>
+    </message>
+    <message>
+      <source>Plane through three points</source>
+      <translation>Piano passante per tre punti</translation>
+    </message>
+    <message>
+      <source>References</source>
+      <translation>Riferimenti</translation>
+    </message>
+    <message>
+      <source>Remove all references and go back to the plane parallel to the screen</source>
+      <translation>Rimuove tutti i riferimenti e torna al piano parallelo allo schermo</translation>
+    </message>
+    <message>
+      <source>Remove this reference</source>
+      <translation>Rimuovi questo riferimento</translation>
+    </message>
+    <message>
+      <source>Reverse side</source>
+      <translation>Inverti lato</translation>
+    </message>
+    <message>
+      <source>Rotation of the plane around the axis</source>
+      <translation>Rotazione del piano attorno all'asse</translation>
+    </message>
+    <message>
+      <source>Section View</source>
+      <translation>Vista in sezione</translation>
+    </message>
+    <message>
+      <source>Section view: cut the model with a movable plane</source>
+      <translation>Vista in sezione: taglia il modello con un piano mobile</translation>
+    </message>
+    <message>
+      <source>Select a second reference to fix the rotation around the axis, or type the angle.</source>
+      <translation>Selezionare un secondo riferimento per fissare la rotazione attorno all'asse, oppure digitare l'angolo.</translation>
+    </message>
+    <message>
+      <source>Select faces, edges, vertices or an origin or datum plane in the 3D view or in the tree to define the section plane. Selecting more adds to the references.</source>
+      <translation>Selezionare facce, bordi, vertici oppure un piano di origine o di riferimento nella vista 3D o nell'albero per definire il piano di sezione. Selezionandone altri vengono aggiunti ai riferimenti.</translation>
+    </message>
+    <message>
+      <source>Selected plane</source>
+      <translation>Piano selezionato</translation>
+    </message>
+    <message>
+      <source>Show arrow and plane</source>
+      <translation>Mostra freccia e piano</translation>
+    </message>
+    <message>
+      <source>Show hatched cut faces</source>
+      <translation>Mostra le facce tagliate tratteggiate</translation>
+    </message>
+    <message>
+      <source>Show the arrow to drag the plane and the plane outline</source>
+      <translation>Mostra la freccia per trascinare il piano e il contorno del piano</translation>
+    </message>
+    <message>
+      <source>Single lines</source>
+      <translation>Linee singole</translation>
+    </message>
+    <message>
+      <source>Spacing</source>
+      <translation>Spaziatura</translation>
+    </message>
+    <message>
+      <source>The plane contains the axis and passes through the second reference; the angle rotates it around the axis.</source>
+      <translation>Il piano contiene l'asse e passa per il secondo riferimento; l'angolo lo ruota attorno all'asse.</translation>
+    </message>
+    <message>
+      <source>The plane is perpendicular to the axis, through its center.</source>
+      <translation>Il piano è perpendicolare all'asse, passante per il suo centro.</translation>
+    </message>
+    <message>
+      <source>The selection does not define a plane</source>
+      <translation>La selezione non definisce un piano</translation>
+    </message>
+    <message>
+      <source>Transparency of the fill</source>
+      <translation>Trasparenza del riempimento</translation>
+    </message>
+    <message>
+      <source>• one planar face: plane of the face
+• two parallel faces: plane midway between them
+• face + vertex or edge: parallel to the face, through the second reference
+• circular edge, round face or straight edge: plane from its axis
+• two vertices: perpendicular to the segment, through its midpoint
+• three vertices: plane through them
+• origin or datum plane: that plane</source>
+      <translation>• una faccia piana: piano della faccia
+• due facce parallele: piano a metà tra le due
+• faccia + vertice o bordo: parallelo alla faccia, passante per il secondo riferimento
+• bordo circolare, faccia tonda o bordo rettilineo: piano ricavato dal suo asse
+• due vertici: perpendicolare al segmento, passante per il suo punto medio
+• tre vertici: piano passante per essi
+• piano di origine o di riferimento: quel piano</translation>
     </message>
   </context>
   <context>
@@ -9664,6 +10062,21 @@ the current copy will be lost.
     </message>
   </context>
   <context>
+    <name>StdCmdSectionView</name>
+    <message>
+      <source>Section &amp;View</source>
+      <translation>&amp;Vista in sezione</translation>
+    </message>
+    <message>
+      <source>Toggles a section of the active 3D view.
+The plane can be a base plane, the view plane or a selected reference,
+and can be moved with the dragger or the offset in the panel.</source>
+      <translation>Attiva o disattiva una sezione della vista 3D attiva.
+Il piano può essere un piano base, il piano della vista o un riferimento selezionato,
+e può essere spostato con il trascinatore o con l'offset nel pannello.</translation>
+    </message>
+  </context>
+  <context>
     <name>StdCmdSelectAll</name>
     <message>
       <location filename="../CommandDoc.cpp" line="1526"/>
@@ -9843,6 +10256,32 @@ the current copy will be lost.
       <location filename="../CommandView.cpp" line="1498"/>
       <source>Sets the camera to the left view</source>
       <translation>Imposta la telecamera sulla vista da sinistra</translation>
+    </message>
+  </context>
+  <context>
+    <name>StdCmdViewOrientationCube</name>
+    <message>
+      <source>Orientation &amp;Cube</source>
+      <translation>&amp;Cubo di orientamento</translation>
+    </message>
+    <message>
+      <source>Fits the view and shows a large orientation cube around the model.
+Click a face, edge or corner of the cube to look at the model from there.
+Esc or the command again hides the cube.</source>
+      <translation>Adatta la vista e mostra un grande cubo di orientamento attorno al modello.
+Fare clic su una faccia, un bordo o uno spigolo del cubo per guardare il modello da quella direzione.
+Esc o di nuovo il comando nasconde il cubo.</translation>
+    </message>
+  </context>
+  <context>
+    <name>StdCmdViewOrientationCubeFit</name>
+    <message>
+      <source>Orientation Cube &amp;Fits View</source>
+      <translation>Il cubo di orientamento &amp;adatta la vista</translation>
+    </message>
+    <message>
+      <source>When enabled, choosing a view on the orientation cube also fits the model to the view</source>
+      <translation>Se abilitato, scegliendo una vista sul cubo di orientamento il modello viene anche adattato alla vista</translation>
     </message>
   </context>
   <context>
