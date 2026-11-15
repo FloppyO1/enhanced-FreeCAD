@@ -1111,7 +1111,13 @@ private:
     }
 
     // Returns false if some free-form piece of the offset could not be converted.
-    bool getOffsetGeos(std::vector<Part::Geometry*>& geometriesToAdd, std::vector<int>& listOfOffsetGeoIds)
+    // With previewCurves, the free-form pieces are not converted to B-splines (which is slow) but
+    // sampled into polylines, which is all the preview needs.
+    bool getOffsetGeos(
+        std::vector<Part::Geometry*>& geometriesToAdd,
+        std::vector<int>& listOfOffsetGeoIds,
+        std::list<std::vector<Base::Vector2d>>* previewCurves = nullptr
+    )
     {
         TopoDS_Shape offsetShape = makeOffsetShape();
         if (offsetShape.IsNull()) {
@@ -1153,6 +1159,20 @@ private:
         }
 
         mergeOffsetPieces(pieces);
+
+        if (previewCurves) {
+            const int samples = 200;
+            for (const OffsetPiece& piece : pieces) {
+                std::vector<Base::Vector2d> curve;
+                for (int i = 0; i <= samples; i++) {
+                    gp_Pnt pnt = piece.carrier->Value(piece.first + (piece.last - piece.first) * i / samples);
+                    curve.emplace_back(pnt.X(), pnt.Y());
+                }
+                previewCurves->push_back(std::move(curve));
+            }
+            return complete;
+        }
+
         // About a millionth of the size of the geometry, at most 1e-4 mm.
         double tolerance = std::clamp(1e-6 * getSourceSize(), 1e-6, 1e-4);
         for (const OffsetPiece& piece : pieces) {
@@ -1175,16 +1195,28 @@ private:
 
     void drawOffsetPreview()
     {
-        try {
-            std::vector<Part::Geometry*> geometriesToAdd;
-            std::vector<int> listOfOffsetGeoIds;
-            getOffsetGeos(geometriesToAdd, listOfOffsetGeoIds);
+        static CurveConverter converter;
 
-            drawEdit(geometriesToAdd);
+        std::vector<Part::Geometry*> geometriesToAdd;
+        std::vector<int> listOfOffsetGeoIds;
+        std::list<std::vector<Base::Vector2d>> curves;
+        try {
+            getOffsetGeos(geometriesToAdd, listOfOffsetGeoIds, &curves);
+            curves.splice(curves.begin(), converter.toVector2DList(geometriesToAdd));
         }
         catch (const Base::Exception& e) {
             e.reportException();
+            curves.clear();
         }
+        catch (const Standard_Failure&) {
+            // The kernel could not offset the curves at this distance: show no preview.
+            curves.clear();
+        }
+        for (Part::Geometry* geo : geometriesToAdd) {
+            delete geo;
+        }
+
+        drawEdit(curves);
     }
 
     void createOffset()
