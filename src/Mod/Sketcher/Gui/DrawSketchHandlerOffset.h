@@ -27,6 +27,8 @@
 
 #include <FCConfig.h>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include <QApplication>
@@ -34,6 +36,7 @@
 #include <BRep_Tool.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
@@ -42,6 +45,20 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BSplCLib.hxx>
+#include <Bnd_Box.hxx>
+#include <ElCLib.hxx>
+#include <Geom_BezierCurve.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_OffsetCurve.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <GeomConvert.hxx>
+#include <GeomConvert_ApproxCurve.hxx>
+#include <math_Gauss.hxx>
+#include <math_Matrix.hxx>
+#include <math_Vector.hxx>
+#include <Precision.hxx>
 #include <TopoDS.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Pln.hxx>
@@ -366,32 +383,794 @@ private:
         }
     }
 
-    void getOffsetGeos(std::vector<Part::Geometry*>& geometriesToAdd, std::vector<int>& listOfOffsetGeoIds)
+    // Free-form offset edges (offsets of B-splines) are converted to B-splines. OCC splits the
+    // offset of one curve into several edges, so the pieces of the same offset curve are joined
+    // first, and each joined piece becomes one B-spline.
+    struct OffsetPiece
+    {
+        Handle(Geom_Curve) carrier;  // untrimmed curve the piece lies on
+        double first;
+        double last;
+        bool reversed;
+    };
+
+    static Handle(Geom_Curve) stripTrimmed(Handle(Geom_Curve) curve)
+    {
+        while (curve->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+            curve = Handle(Geom_TrimmedCurve)::DownCast(curve)->BasisCurve();
+        }
+        return curve;
+    }
+
+    static bool isSameCarrier(const Handle(Geom_Curve)& curve1, const Handle(Geom_Curve)& curve2)
+    {
+        if (curve1 == curve2) {
+            return true;
+        }
+        auto offset1 = Handle(Geom_OffsetCurve)::DownCast(curve1);
+        auto offset2 = Handle(Geom_OffsetCurve)::DownCast(curve2);
+        if (!offset1.IsNull() && !offset2.IsNull()) {
+            return std::fabs(offset1->Offset() - offset2->Offset()) < Precision::Confusion()
+                && offset1->Direction().IsEqual(offset2->Direction(), Precision::Angular())
+                && isSameCarrier(
+                       stripTrimmed(offset1->BasisCurve()),
+                       stripTrimmed(offset2->BasisCurve())
+                );
+        }
+        auto bspline1 = Handle(Geom_BSplineCurve)::DownCast(curve1);
+        auto bspline2 = Handle(Geom_BSplineCurve)::DownCast(curve2);
+        if (bspline1.IsNull() || bspline2.IsNull() || bspline1->Degree() != bspline2->Degree()
+            || bspline1->NbPoles() != bspline2->NbPoles()
+            || bspline1->NbKnots() != bspline2->NbKnots()
+            || bspline1->IsPeriodic() != bspline2->IsPeriodic()) {
+            return false;
+        }
+        for (int i = 1; i <= bspline1->NbPoles(); i++) {
+            if (bspline1->Pole(i).Distance(bspline2->Pole(i)) > Precision::Confusion()
+                || std::fabs(bspline1->Weight(i) - bspline2->Weight(i)) > Precision::PConfusion()) {
+                return false;
+            }
+        }
+        for (int i = 1; i <= bspline1->NbKnots(); i++) {
+            if (std::fabs(bspline1->Knot(i) - bspline2->Knot(i)) > Precision::PConfusion()
+                || bspline1->Multiplicity(i) != bspline2->Multiplicity(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Two pieces of an offset curve can be joined at u only where its basis curve is not a corner.
+    static bool isSmoothAt(const Handle(Geom_Curve)& carrier, double u)
+    {
+        Handle(Geom_Curve) basis = carrier;
+        if (auto offset = Handle(Geom_OffsetCurve)::DownCast(carrier)) {
+            basis = stripTrimmed(offset->BasisCurve());
+        }
+        auto bspline = Handle(Geom_BSplineCurve)::DownCast(basis);
+        if (bspline.IsNull()) {
+            return true;
+        }
+        if (bspline->IsPeriodic()) {
+            bspline->PeriodicNormalization(u);
+        }
+        int index1 = 0;
+        int index2 = 0;
+        bspline->LocateU(u, Precision::PConfusion(), index1, index2);
+        return index1 != index2 || bspline->Multiplicity(index1) < bspline->Degree();
+    }
+
+    static bool edgeToOffsetPiece(const TopoDS_Edge& edge, std::vector<OffsetPiece>& pieces)
+    {
+        double first {};
+        double last {};
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+        if (curve.IsNull()) {
+            return false;
+        }
+        Handle(Geom_Curve) carrier = stripTrimmed(curve);
+        if (auto offset = Handle(Geom_OffsetCurve)::DownCast(carrier)) {
+            // The pieces of one offset curve can lie on different trims of the same basis curve.
+            Handle(Geom_Curve) basis = stripTrimmed(offset->BasisCurve());
+            if (basis != offset->BasisCurve()) {
+                carrier = new Geom_OffsetCurve(basis, offset->Offset(), offset->Direction());
+            }
+        }
+        pieces.push_back({carrier, first, last, edge.Orientation() == TopAbs_REVERSED});
+        return true;
+    }
+
+    static void mergeOffsetPieces(std::vector<OffsetPiece>& pieces)
+    {
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            for (size_t i = 0; i < pieces.size() && !merged; i++) {
+                for (size_t j = 0; j < pieces.size() && !merged; j++) {
+                    OffsetPiece& piece = pieces[i];
+                    const OffsetPiece& next = pieces[j];
+                    if (i == j || piece.reversed != next.reversed
+                        || !isSameCarrier(piece.carrier, next.carrier)) {
+                        continue;
+                    }
+                    double gap = next.first - piece.last;
+                    double period = piece.carrier->IsPeriodic() ? piece.carrier->Period() : 0.;
+                    if (period > 0.) {
+                        gap -= period * std::round(gap / period);
+                    }
+                    double newLast = piece.last + (next.last - next.first);
+                    if (std::fabs(gap) > Precision::PConfusion()
+                        || (period > 0. && newLast - piece.first > period + Precision::PConfusion())
+                        || !isSmoothAt(piece.carrier, piece.last)) {
+                        continue;
+                    }
+                    piece.last = newLast;
+                    pieces.erase(pieces.begin() + j);
+                    merged = true;
+                }
+            }
+        }
+    }
+
+    // Moves u to the parameter of the point of the curve nearest to point (local search).
+    static double projectOnCurve(const Handle(Geom_Curve)& curve, const gp_Pnt& point, double u)
+    {
+        for (int i = 0; i < 10; i++) {
+            gp_Pnt p;
+            gp_Vec d1, d2;
+            curve->D2(u, p, d1, d2);
+            gp_Vec diff(point, p);
+            double den = d1.SquareMagnitude() + diff.Dot(d2);
+            if (std::fabs(den) < gp::Resolution()) {
+                break;
+            }
+            double step = diff.Dot(d1) / den;
+            u -= step;
+            if (std::fabs(step) < Precision::PConfusion()) {
+                break;
+            }
+        }
+        return u;
+    }
+
+    // Least squares fit of points at params, with the knots of shape. The end poles of a non
+    // periodic shape are fixed to start and end.
+    static Handle(Geom_BSplineCurve) fitPoints(
+        const Handle(Geom_BSplineCurve)& shape,
+        const std::vector<double>& params,
+        const std::vector<gp_Pnt>& points,
+        const gp_Pnt& start,
+        const gp_Pnt& end
+    )
+    {
+        const bool periodic = shape->IsPeriodic();
+        const int degree = shape->Degree();
+        const int nPoles = shape->NbPoles();
+        NCollection_Array1<double> flatKnots(
+            1,
+            BSplCLib::KnotSequenceLength(shape->Multiplicities(), degree, periodic)
+        );
+        shape->KnotSequence(flatKnots);
+
+        const int firstFree = periodic ? 1 : 2;
+        const int nFree = periodic ? nPoles : nPoles - 2;
+        NCollection_Array1<gp_Pnt> poles(1, nPoles);
+        poles(1) = start;
+        poles(nPoles) = end;
+        if (nFree > 0) {
+            math_Matrix normal(1, nFree, 1, nFree, 0.0);
+            math_Vector rhs[3] = {
+                math_Vector(1, nFree, 0.0),
+                math_Vector(1, nFree, 0.0),
+                math_Vector(1, nFree, 0.0)
+            };
+            math_Matrix basis(1, 1, 1, degree + 1);
+            std::vector<int> index(degree + 1);
+            std::vector<double> value(degree + 1);
+            for (size_t s = 0; s < params.size(); s++) {
+                int firstNonZero = 0;
+                BSplCLib::EvalBsplineBasis(
+                    0,
+                    degree + 1,
+                    flatKnots,
+                    params[s],
+                    firstNonZero,
+                    basis,
+                    periodic
+                );
+                gp_XYZ target = points[s].XYZ();
+                for (int j = 0; j <= degree; j++) {
+                    int pole = firstNonZero + j;
+                    if (periodic) {
+                        pole = (pole - 1) % nPoles + 1;
+                    }
+                    value[j] = basis(1, j + 1);
+                    index[j] = pole - firstFree + 1;
+                    if (!periodic && pole == 1) {
+                        target -= value[j] * start.XYZ();
+                    }
+                    else if (!periodic && pole == nPoles) {
+                        target -= value[j] * end.XYZ();
+                    }
+                }
+                for (int a = 0; a <= degree; a++) {
+                    if (index[a] < 1 || index[a] > nFree) {
+                        continue;
+                    }
+                    for (int b = 0; b <= degree; b++) {
+                        if (index[b] >= 1 && index[b] <= nFree) {
+                            normal(index[a], index[b]) += value[a] * value[b];
+                        }
+                    }
+                    for (int c = 0; c < 3; c++) {
+                        rhs[c](index[a]) += value[a] * target.Coord(c + 1);
+                    }
+                }
+            }
+            math_Gauss solver(normal);
+            if (!solver.IsDone()) {
+                return {};
+            }
+            for (int c = 0; c < 3; c++) {
+                math_Vector x(1, nFree);
+                solver.Solve(rhs[c], x);
+                for (int i = 1; i <= nFree; i++) {
+                    poles(i + firstFree - 1).SetCoord(c + 1, x(i));
+                }
+            }
+        }
+        Handle(Geom_BSplineCurve) fit = Handle(Geom_BSplineCurve)::DownCast(shape->Copy());
+        for (int i = 1; i <= nPoles; i++) {
+            fit->SetPole(i, poles(i));
+        }
+        return fit;
+    }
+
+    // Approximates target over the parameter range of shape. The fit starts with the knots of
+    // shape (the knots of the curve that was offset) and adds knots where the distance to target
+    // exceeds tolerance, so the number of poles stays close to the one of the original curve.
+    static Handle(Geom_BSplineCurve) fitOnKnots(
+        const Handle(Geom_Curve)& target,
+        Handle(Geom_BSplineCurve) shape,
+        double tolerance
+    )
+    {
+        const int maxPoles = 500;
+        const double first = shape->FirstParameter();
+        const double last = shape->LastParameter();
+        const gp_Pnt start = target->Value(first);
+        const gp_Pnt end = target->Value(last);
+        for (int iteration = 0; iteration < 60; iteration++) {
+            const int samplesPerSpan = shape->Degree() + 4;
+            std::vector<double> sampleParams;  // parameters on target
+            std::vector<double> params;        // parameters on the fit
+            std::vector<gp_Pnt> points;
+            for (int k = 1; k < shape->NbKnots(); k++) {
+                double k0 = shape->Knot(k);
+                double k1 = shape->Knot(k + 1);
+                for (int s = 0; s < samplesPerSpan; s++) {
+                    params.push_back(k0 + (k1 - k0) * (s + 0.5) / samplesPerSpan);
+                    points.push_back(target->Value(params.back()));
+                    sampleParams.push_back(params.back());
+                }
+            }
+
+            // Fit, then move the parameters to the feet of the points on the fit and fit again,
+            // so that the fit follows the shape of target rather than its parametrization.
+            Handle(Geom_BSplineCurve) fit;
+            for (int pass = 0; pass < 4; pass++) {
+                fit = fitPoints(shape, params, points, start, end);
+                if (fit.IsNull()) {
+                    return {};
+                }
+                if (pass == 3) {
+                    break;
+                }
+                for (size_t s = 0; s < params.size(); s++) {
+                    double u = projectOnCurve(fit, points[s], params[s]);
+                    if (shape->IsPeriodic()) {
+                        u = ElCLib::InPeriod(u, first, last);
+                    }
+                    params[s] = std::clamp(u, first, last);
+                }
+            }
+
+            // Distance from target to the fit, at the samples and between them, gathered per span
+            // of the fit. Knots are added in the worst spans only, as each new knot also improves
+            // its neighbours.
+            std::vector<double> spanError(shape->NbKnots() - 1, 0.);
+            auto addError = [&](double u, double guess) {
+                gp_Pnt p = target->Value(u);
+                double t = projectOnCurve(fit, p, guess);
+                t = shape->IsPeriodic() ? ElCLib::InPeriod(t, first, last)
+                                        : std::clamp(t, first, last);
+                int span = 0;
+                int next = 0;
+                shape->LocateU(t, Precision::PConfusion(), span, next);
+                span = std::clamp(span, 1, shape->NbKnots() - 1);
+                spanError[span - 1] = std::max(spanError[span - 1], p.Distance(fit->Value(t)));
+            };
+            for (size_t s = 0; s < params.size(); s++) {
+                addError(sampleParams[s], params[s]);
+                if (s + 1 < params.size()) {
+                    bool wraps = std::fabs(params[s + 1] - params[s]) > 0.5 * (last - first);
+                    addError(
+                        0.5 * (sampleParams[s] + sampleParams[s + 1]),
+                        wraps ? params[s] : 0.5 * (params[s] + params[s + 1])
+                    );
+                }
+            }
+            double maxError = *std::max_element(spanError.begin(), spanError.end());
+            std::vector<double> newKnots;
+            for (int k = 1; k < shape->NbKnots(); k++) {
+                if (spanError[k - 1] > tolerance && spanError[k - 1] >= 0.5 * maxError) {
+                    newKnots.push_back(0.5 * (shape->Knot(k) + shape->Knot(k + 1)));
+                }
+            }
+            if (newKnots.empty()) {
+                return fit;
+            }
+            if (shape->NbPoles() + static_cast<int>(newKnots.size()) > maxPoles) {
+                return {};
+            }
+            for (double u : newKnots) {
+                shape->InsertKnot(u, 1, Precision::PConfusion());
+            }
+        }
+        return {};
+    }
+
+    static Handle(Geom_BSplineCurve) offsetPieceToBSpline(const OffsetPiece& piece, double tolerance)
+    {
+        const Handle(Geom_Curve)& carrier = piece.carrier;
+        const bool fullLoop = carrier->IsPeriodic()
+            && std::fabs(piece.last - piece.first - carrier->Period()) < Precision::PConfusion();
+
+        Handle(Geom_BSplineCurve) bspline;
+        if (carrier->IsKind(STANDARD_TYPE(Geom_BSplineCurve))
+            || carrier->IsKind(STANDARD_TYPE(Geom_BezierCurve))) {
+            // Exact conversion.
+            if (fullLoop) {
+                bspline = Handle(Geom_BSplineCurve)::DownCast(carrier->Copy());
+            }
+            else {
+                Handle(Geom_Curve) trimmed = new Geom_TrimmedCurve(carrier, piece.first, piece.last);
+                bspline = GeomConvert::CurveToBSplineCurve(trimmed);
+            }
+        }
+        else {
+            Handle(Geom_BSplineCurve) basis;
+            if (auto offset = Handle(Geom_OffsetCurve)::DownCast(carrier)) {
+                basis = Handle(Geom_BSplineCurve)::DownCast(stripTrimmed(offset->BasisCurve()));
+            }
+            if (!basis.IsNull()
+                && (basis->IsPeriodic()
+                    || (piece.first > basis->FirstParameter() - Precision::PConfusion()
+                        && piece.last < basis->LastParameter() + Precision::PConfusion()))) {
+                Handle(Geom_BSplineCurve) shape = Handle(Geom_BSplineCurve)::DownCast(basis->Copy());
+                if (!fullLoop) {
+                    shape->Segment(piece.first, piece.last);
+                }
+                // Only the knots of shape are used: the fit is polynomial.
+                if (shape->IsRational()) {
+                    for (int i = 1; i <= shape->NbPoles(); i++) {
+                        shape->SetWeight(i, 1.0);
+                    }
+                }
+                if (shape->Degree() < 3) {
+                    shape->IncreaseDegree(3);
+                }
+                bspline = fitOnKnots(carrier, shape, tolerance);
+            }
+            if (bspline.IsNull()) {
+                // Generic approximation, for other kinds of curves.
+                Handle(Geom_Curve) trimmed = new Geom_TrimmedCurve(carrier, piece.first, piece.last);
+                GeomConvert_ApproxCurve approx(trimmed, tolerance, GeomAbs_C2, 200, 9);
+                if (!approx.HasResult() || approx.MaxError() > 10 * tolerance) {
+                    return {};
+                }
+                bspline = approx.Curve();
+                // Exact end points, so that the joints with the neighbours are found.
+                gp_Pnt start = trimmed->Value(trimmed->FirstParameter());
+                bspline->SetPole(1, start);
+                bspline->SetPole(
+                    bspline->NbPoles(),
+                    fullLoop ? start : trimmed->Value(trimmed->LastParameter())
+                );
+            }
+        }
+
+        if (piece.reversed) {
+            bspline->Reverse();
+        }
+        return bspline;
+    }
+
+    // Finds where the curve crosses itself near the parameters u and v.
+    static bool intersectBranches(const Handle(Geom_Curve)& curve, double& u, double& v)
+    {
+        const double u0 = u;
+        const double v0 = v;
+        for (int i = 0; i < 50; i++) {
+            gp_Pnt p, q;
+            gp_Vec du, dv;
+            curve->D1(u, p, du);
+            curve->D1(v, q, dv);
+            gp_Vec diff(q, p);
+            if (diff.Magnitude() < Precision::Confusion() * 1e-3) {
+                break;
+            }
+            // Solve du * a - dv * b = -diff in the sketch plane.
+            double det = dv.X() * du.Y() - du.X() * dv.Y();
+            if (std::fabs(det) < gp::Resolution()) {
+                return false;
+            }
+            u += (diff.X() * dv.Y() - dv.X() * diff.Y()) / det;
+            v += (diff.X() * du.Y() - du.X() * diff.Y()) / det;
+        }
+        double range = curve->IsPeriodic() ? curve->Period()
+                                           : curve->LastParameter() - curve->FirstParameter();
+        return curve->Value(u).Distance(curve->Value(v)) < Precision::Confusion()
+            && std::fabs(u - u0) < 0.05 * range && std::fabs(v - v0) < 0.05 * range;
+    }
+
+    // Parameters (u, v) where the closed curve crosses itself. Found on a polyline through
+    // nSamples points of the curve, then refined on the curve.
+    static std::vector<std::pair<double, double>> findSelfIntersections(
+        const Handle(Geom_Curve)& curve,
+        double first,
+        double period,
+        int nSamples
+    )
+    {
+        struct Segment
+        {
+            int index;
+            double xMin;
+            double xMax;
+            double yMin;
+            double yMax;
+        };
+        const double step = period / nSamples;
+        std::vector<gp_Pnt> points;
+        for (int i = 0; i <= nSamples; i++) {
+            points.push_back(curve->Value(first + step * (i % nSamples)));
+        }
+        std::vector<Segment> segments;
+        for (int i = 0; i < nSamples; i++) {
+            const gp_Pnt& p = points[i];
+            const gp_Pnt& q = points[i + 1];
+            segments.push_back(
+                {i,
+                 std::min(p.X(), q.X()),
+                 std::max(p.X(), q.X()),
+                 std::min(p.Y(), q.Y()),
+                 std::max(p.Y(), q.Y())}
+            );
+        }
+        std::sort(segments.begin(), segments.end(), [](const Segment& a, const Segment& b) {
+            return a.xMin < b.xMin;
+        });
+
+        std::vector<std::pair<double, double>> intersections;
+        for (size_t a = 0; a < segments.size(); a++) {
+            for (size_t b = a + 1; b < segments.size() && segments[b].xMin <= segments[a].xMax;
+                 b++) {
+                const Segment* s1 = &segments[a];
+                const Segment* s2 = &segments[b];
+                if (s1->index > s2->index) {
+                    std::swap(s1, s2);
+                }
+                int gap = s2->index - s1->index;
+                if (gap <= 1 || gap >= nSamples - 1 || s1->yMax < s2->yMin || s2->yMax < s1->yMin) {
+                    continue;  // neighbours, or no overlap
+                }
+                gp_Vec d1(points[s1->index], points[s1->index + 1]);
+                gp_Vec d2(points[s2->index], points[s2->index + 1]);
+                gp_Vec w(points[s2->index], points[s1->index]);
+                double det = d2.X() * d1.Y() - d1.X() * d2.Y();
+                if (std::fabs(det) < gp::Resolution()) {
+                    continue;
+                }
+                // Solve points[s1] + r * d1 = points[s2] + t * d2.
+                double r = (w.X() * d2.Y() - d2.X() * w.Y()) / det;
+                double t = (w.X() * d1.Y() - d1.X() * w.Y()) / det;
+                if (r < 0. || r >= 1. || t < 0. || t >= 1.) {
+                    continue;
+                }
+                double u = first + step * (s1->index + r);
+                double v = first + step * (s2->index + t);
+                if (!intersectBranches(curve, u, v)) {
+                    continue;
+                }
+                u = ElCLib::InPeriod(u, first, first + period);
+                v = ElCLib::InPeriod(v, first, first + period);
+                bool known = false;
+                for (const auto& [ku, kv] : intersections) {
+                    known = known
+                        || (std::fabs(ku - u) < 1e-9 * period && std::fabs(kv - v) < 1e-9 * period);
+                }
+                if (!known) {
+                    intersections.emplace_back(u, v);
+                }
+            }
+        }
+        return intersections;
+    }
+
+    // Twice the signed area enclosed by the closed curve (positive when counterclockwise).
+    static double signedArea(const Handle(Geom_Curve)& curve, double first, double period)
+    {
+        const int nSamples = 1000;
+        double area = 0.;
+        gp_Pnt previous = curve->Value(first);
+        for (int i = 1; i <= nSamples; i++) {
+            gp_Pnt p = curve->Value(first + period * (i % nSamples) / nSamples);
+            area += previous.X() * p.Y() - p.X() * previous.Y();
+            previous = p;
+        }
+        return area;
+    }
+
+    // Exact offset of a closed smooth (periodic) curve, outward for a positive offset. The
+    // offset curve is cut where it crosses itself, and the pieces that come closer to the source
+    // than the offset distance (the loops at the cusps) are left out.
+    static bool offsetClosedCurve(
+        const Handle(Geom_BSplineCurve)& source,
+        double offset,
+        std::vector<OffsetPiece>& pieces
+    )
+    {
+        const double first = source->FirstParameter();
+        const double period = source->Period();
+        const double distance = std::fabs(offset);
+        // The positive side of Geom_OffsetCurve is on the right of the curve.
+        bool counterclockwise = signedArea(source, first, period) > 0.;
+        double signedOffset = (counterclockwise == (offset > 0.)) ? distance : -distance;
+        Handle(Geom_Curve) carrier = new Geom_OffsetCurve(source, signedOffset, gp::DZ());
+
+        int nSamples = std::clamp(32 * source->NbKnots(), 512, 4096);
+        std::vector<double> cuts;
+        for (const auto& [u, v] : findSelfIntersections(carrier, first, period, nSamples)) {
+            cuts.push_back(u);
+            cuts.push_back(v);
+        }
+        std::sort(cuts.begin(), cuts.end());
+
+        auto isValid = [&](double u) {
+            GeomAPI_ProjectPointOnCurve projection(carrier->Value(u), source);
+            return projection.NbPoints() > 0
+                && projection.LowerDistance() > distance * (1. - 1e-6) - Precision::Confusion();
+        };
+
+        if (cuts.empty()) {
+            if (!isValid(first)) {
+                return false;
+            }
+            pieces.push_back({carrier, first, first + period, false});
+            return true;
+        }
+
+        // Valid intervals between cuts, joined where two of them follow each other.
+        std::vector<std::pair<double, double>> intervals;
+        for (size_t i = 0; i < cuts.size(); i++) {
+            double start = cuts[i];
+            double end = i + 1 < cuts.size() ? cuts[i + 1] : cuts[0] + period;
+            if (end - start < Precision::PConfusion()) {
+                continue;
+            }
+            double length = end - start;
+            if (!isValid(start + 0.25 * length) || !isValid(start + 0.5 * length)
+                || !isValid(start + 0.75 * length)) {
+                continue;
+            }
+            if (!intervals.empty()
+                && std::fabs(intervals.back().second - start) < Precision::PConfusion()) {
+                intervals.back().second = end;
+            }
+            else {
+                intervals.emplace_back(start, end);
+            }
+        }
+        if (intervals.size() > 1
+            && std::fabs(intervals.back().second - (intervals.front().first + period))
+                < Precision::PConfusion()) {
+            intervals.front().first = intervals.back().first - period;
+            intervals.pop_back();
+        }
+        for (const auto& [start, end] : intervals) {
+            pieces.push_back({carrier, start, end, false});
+        }
+        return !intervals.empty();
+    }
+
+    // Size of the source geometry, used to scale the tolerances.
+    double getSourceSize() const
+    {
+        Bnd_Box box;
+        for (const TopoDS_Wire& wire : sourceWires) {
+            BRepBndLib::Add(wire, box);
+        }
+        return box.IsVoid() ? 0. : std::sqrt(box.SquareExtent());
+    }
+
+    // The periodic B-spline of a source wire made of only that curve, or null.
+    static Handle(Geom_BSplineCurve) getPeriodicBSpline(const TopoDS_Wire& wire)
+    {
+        TopExp_Explorer expl(wire, TopAbs_EDGE);
+        if (!expl.More()) {
+            return {};
+        }
+        TopoDS_Edge edge = TopoDS::Edge(expl.Current());
+        expl.Next();
+        if (expl.More()) {
+            return {};
+        }
+        double first {};
+        double last {};
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+        if (curve.IsNull()) {
+            return {};
+        }
+        auto bspline = Handle(Geom_BSplineCurve)::DownCast(stripTrimmed(curve));
+        if (bspline.IsNull() || !bspline->IsPeriodic()) {
+            return {};
+        }
+        return bspline;
+    }
+
+    // OCC approximates the offset of a curve with arcs and lines when the offset has cusps (when
+    // the offset distance is larger than the radius of curvature somewhere). The offset wires of
+    // a source wire made of one periodic B-spline are then replaced by its exact offset, added to
+    // pieces. Returns the offset wires to keep.
+    std::vector<TopoDS_Wire> replaceApproximatedWires(
+        const TopoDS_Shape& offsetShape,
+        std::vector<OffsetPiece>& pieces
+    ) const
+    {
+        std::vector<TopoDS_Wire> offsetWires;
+        std::vector<std::vector<TopoDS_Edge>> wireEdges;
+        std::vector<bool> approximated;
+        for (TopExp_Explorer expl(offsetShape, TopAbs_WIRE); expl.More(); expl.Next()) {
+            offsetWires.push_back(TopoDS::Wire(expl.Current()));
+            wireEdges.emplace_back();
+            approximated.push_back(false);
+            for (TopExp_Explorer edgeExpl(offsetWires.back(), TopAbs_EDGE); edgeExpl.More();
+                 edgeExpl.Next()) {
+                wireEdges.back().push_back(TopoDS::Edge(edgeExpl.Current()));
+                GeomAbs_CurveType type = BRepAdaptor_Curve(wireEdges.back().back()).GetType();
+                approximated.back() = approximated.back() || type == GeomAbs_Line
+                    || type == GeomAbs_Circle;
+            }
+        }
+        if (std::find(approximated.begin(), approximated.end(), true) == approximated.end()) {
+            return offsetWires;
+        }
+
+        // The source wire each offset wire comes from: the nearest source wire of all its edges
+        // (of a sample of them), or -1 if it comes from several (offsets of different wires that
+        // merged).
+        std::vector<int> wireSource(offsetWires.size(), -1);
+        for (size_t i = 0; i < offsetWires.size(); i++) {
+            const std::vector<TopoDS_Edge>& edges = wireEdges[i];
+            const size_t step = std::max<size_t>(1, edges.size() / 16);
+            for (size_t e = 0; e < edges.size(); e += step) {
+                BRepAdaptor_Curve curve(edges[e]);
+                TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(
+                    curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))
+                );
+                int edgeSource = -1;
+                double nearest = std::numeric_limits<double>::max();
+                for (size_t j = 0; j < sourceWires.size(); j++) {
+                    BRepExtrema_DistShapeShape distTool(sourceWires[j], vertex);
+                    if (distTool.IsDone() && distTool.Value() < nearest) {
+                        nearest = distTool.Value();
+                        edgeSource = static_cast<int>(j);
+                    }
+                }
+                if (e > 0 && edgeSource != wireSource[i]) {
+                    wireSource[i] = -1;
+                    break;
+                }
+                wireSource[i] = edgeSource;
+            }
+        }
+
+        std::vector<bool> replaced(sourceWires.size(), false);
+        for (size_t j = 0; j < sourceWires.size(); j++) {
+            bool needed = false;
+            for (size_t i = 0; i < offsetWires.size(); i++) {
+                needed = needed || (approximated[i] && wireSource[i] == static_cast<int>(j));
+            }
+            Handle(Geom_BSplineCurve) source;
+            if (needed) {
+                source = getPeriodicBSpline(sourceWires[j]);
+            }
+            if (source.IsNull()) {
+                continue;
+            }
+            try {
+                // A positive offset is outward, as for BRepOffsetAPI_MakeOffset.
+                std::vector<OffsetPiece> exact;
+                if (offsetClosedCurve(source, offsetLength, exact)) {
+                    pieces.insert(pieces.end(), exact.begin(), exact.end());
+                    replaced[j] = true;
+                }
+            }
+            catch (const Standard_Failure&) {
+            }
+        }
+
+        std::vector<TopoDS_Wire> kept;
+        for (size_t i = 0; i < offsetWires.size(); i++) {
+            if (wireSource[i] < 0 || !replaced[wireSource[i]]) {
+                kept.push_back(offsetWires[i]);
+            }
+        }
+        return kept;
+    }
+
+    // Returns false if some free-form piece of the offset could not be converted.
+    bool getOffsetGeos(std::vector<Part::Geometry*>& geometriesToAdd, std::vector<int>& listOfOffsetGeoIds)
     {
         TopoDS_Shape offsetShape = makeOffsetShape();
         if (offsetShape.IsNull()) {
-            return;
+            return true;
         }
 
-        TopExp_Explorer expl(offsetShape, TopAbs_EDGE);
+        std::vector<TopoDS_Edge> edges;
+        std::vector<OffsetPiece> pieces;
+        for (const TopoDS_Wire& wire : replaceApproximatedWires(offsetShape, pieces)) {
+            for (TopExp_Explorer expl(wire, TopAbs_EDGE); expl.More(); expl.Next()) {
+                edges.push_back(TopoDS::Edge(expl.Current()));
+            }
+        }
+        for (TopExp_Explorer expl(offsetShape, TopAbs_EDGE, TopAbs_WIRE); expl.More(); expl.Next()) {
+            edges.push_back(TopoDS::Edge(expl.Current()));
+        }
+
         int geoIdToAdd = firstCurveCreated;
-        for (; expl.More(); expl.Next(), geoIdToAdd++) {
-            const TopoDS_Edge& edge = TopoDS::Edge(expl.Current());
+        auto addGeometry = [&](Part::Geometry* geo) {
+            geometriesToAdd.push_back(geo);
+            listOfOffsetGeoIds.push_back(geoIdToAdd++);
+        };
+
+        bool complete = true;
+        for (const TopoDS_Edge& edge : edges) {
             BRepAdaptor_Curve curve(edge);
             if (curve.GetType() == GeomAbs_Line) {
-                geometriesToAdd.push_back(curveToLine(curve));
-                listOfOffsetGeoIds.push_back(geoIdToAdd);
+                addGeometry(curveToLine(curve));
             }
             else if (curve.GetType() == GeomAbs_Circle) {
-                geometriesToAdd.push_back(curveToCircleOrArc(curve, edge));
-                listOfOffsetGeoIds.push_back(geoIdToAdd);
+                addGeometry(curveToCircleOrArc(curve, edge));
             }
             else if (curve.GetType() == GeomAbs_Ellipse) {
-                geometriesToAdd.push_back(curveToEllipseOrArc(curve, edge));
-                listOfOffsetGeoIds.push_back(geoIdToAdd);
+                addGeometry(curveToEllipseOrArc(curve, edge));
             }
-            // TODO Bspline support
+            else if (!edgeToOffsetPiece(edge, pieces)) {
+                complete = false;
+            }
         }
+
+        mergeOffsetPieces(pieces);
+        // About a millionth of the size of the geometry, at most 1e-4 mm.
+        double tolerance = std::clamp(1e-6 * getSourceSize(), 1e-6, 1e-4);
+        for (const OffsetPiece& piece : pieces) {
+            Handle(Geom_BSplineCurve) bspline;
+            try {
+                bspline = offsetPieceToBSpline(piece, tolerance);
+            }
+            catch (const Standard_Failure&) {
+            }
+            if (bspline.IsNull()) {
+                complete = false;
+                continue;
+            }
+            auto* geo = new Part::GeomBSplineCurve(bspline);
+            GeometryFacade::setConstruction(geo, false);
+            addGeometry(geo);
+        }
+        return complete;
     }
 
     void drawOffsetPreview()
@@ -412,9 +1191,13 @@ private:
     {
         std::vector<Part::Geometry*> geometriesToAdd;
         std::vector<int> listOfOffsetGeoIds;
-        getOffsetGeos(geometriesToAdd, listOfOffsetGeoIds);
+        bool complete = getOffsetGeos(geometriesToAdd, listOfOffsetGeoIds);
 
         SketchObject* Obj = sketchgui->getSketchObject();
+
+        if (!complete) {
+            Base::Console().warning("Offset: some curves of the offset could not be converted\n");
+        }
 
         if (listOfOffsetGeoIds.empty()) {
             Gui::NotifyUserError(
@@ -433,6 +1216,12 @@ private:
         // Create coincident (& tangent) constraints
         jointOffsetCurves(listOfOffsetGeoIds);
 
+        for (int geoId : listOfOffsetGeoIds) {
+            if (isBSplineCurve(*Obj->getGeometry(geoId))) {
+                addBSplineInternalGeometry(geoId);
+            }
+        }
+
         if (deleteOriginal) {
             deleteOriginalGeometries();
         }
@@ -441,6 +1230,56 @@ private:
         }
 
         commitCommand();
+    }
+
+    // Adds the control point circles and the knot points of a new B-spline, as the B-spline tool
+    // does. The circles are made with the radius of their weight: exposeInternalGeometry() alone
+    // would make them smaller and let the solver fix the radii, and on the way the solver moves
+    // the poles away from the computed offset.
+    void addBSplineInternalGeometry(int geoId)
+    {
+        SketchObject* Obj = sketchgui->getSketchObject();
+        const auto* bspline = static_cast<const Part::GeomBSplineCurve*>(Obj->getGeometry(geoId));
+        std::vector<Base::Vector3d> poles = bspline->getPoles();
+        std::vector<double> weights = bspline->getWeights();
+
+        std::vector<Part::Geometry*> circles;
+        for (size_t i = 0; i < poles.size(); i++) {
+            auto* circle = new Part::GeomCircle();
+            circle->setCenter(poles[i]);
+            circle->setRadius(weights[i]);
+            GeometryFacade::setConstruction(circle, true);
+            circles.push_back(circle);
+        }
+        int firstCircle = getHighestCurveIndex() + 1;
+        Obj->addGeometry(std::move(circles));
+
+        // Same weight constraints as exposeInternalGeometry().
+        std::stringstream stream;
+        stream << "conList = []\n";
+        for (size_t i = 0; i < poles.size(); i++) {
+            int circleId = firstCircle + static_cast<int>(i);
+            stream << "conList.append(Sketcher.Constraint('InternalAlignment:Sketcher::"
+                      "BSplineControlPoint',"
+                   << circleId << "," << static_cast<int>(PointPos::mid) << "," << geoId << ","
+                   << i << "))\n";
+            if (weights[0] != 1.0) {
+                continue;
+            }
+            if (i == 0) {
+                stream << "conList.append(Sketcher.Constraint('Weight'," << circleId << ",1.0))\n";
+            }
+            else if (weights[i] == weights[0]) {
+                stream << "conList.append(Sketcher.Constraint('Equal'," << firstCircle << ","
+                       << circleId << "))\n";
+            }
+        }
+        stream << Gui::Command::getObjectCmd(sketchgui->getObject()) << ".addConstraint(conList)\n";
+        stream << "del conList\n";
+        Gui::Command::doCommand(Gui::Command::Doc, stream.str().c_str());
+
+        // Knot points, which exposeInternalGeometry() places exactly on the curve.
+        Gui::cmdAppObjectArgs(sketchgui->getObject(), "exposeInternalGeometry(%d)", geoId);
     }
 
     void jointOffsetCurves(std::vector<int>& listOfOffsetGeoIds)
@@ -460,38 +1299,54 @@ private:
                     continue;
                 }
 
-                bool create = false;
-                PointPos posi, posj;
+                // Two curves can meet at both of their ends (e.g. two pieces closing a loop), but
+                // each end point is joined only once. A second tangency between the same two
+                // curves would be redundant (two arcs of one circle), so it is a coincidence.
+                bool tangentUsed = false;
+                const std::pair<PointPos, Base::Vector3d> firstEnds[2] = {
+                    {PointPos::start, firstStartPoint},
+                    {PointPos::end, firstEndPoint}
+                };
+                const std::pair<PointPos, Base::Vector3d> secondEnds[2] = {
+                    {PointPos::start, secondStartPoint},
+                    {PointPos::end, secondEndPoint}
+                };
+                bool firstUsed[2] = {false, false};
+                bool secondUsed[2] = {false, false};
+                for (int a = 0; a < 2; a++) {
+                    for (int b = 0; b < 2; b++) {
+                        if (firstUsed[a] || secondUsed[b]
+                            || (firstEnds[a].second - secondEnds[b].second).Length()
+                                >= Precision::Confusion()) {
+                            continue;
+                        }
+                        firstUsed[a] = true;
+                        secondUsed[b] = true;
+                        PointPos posi = firstEnds[a].first;
+                        PointPos posj = secondEnds[b].first;
+                        bool tangent = !tangentUsed
+                            && needTangent(listOfOffsetGeoIds[i], listOfOffsetGeoIds[j], posi, posj);
+                        tangentUsed = tangentUsed || tangent;
+                        stream << "conList.append(Sketcher.Constraint('"
+                               << (tangent ? "Tangent" : "Coincident");
+                        stream << "'," << listOfOffsetGeoIds[i] << "," << static_cast<int>(posi)
+                               << ", " << listOfOffsetGeoIds[j] << "," << static_cast<int>(posj)
+                               << "))\n";
+                    }
+                }
+            }
+        }
 
-                if ((firstStartPoint - secondStartPoint).Length() < Precision::Confusion()) {
-                    create = true;
-                    posi = PointPos::start;
-                    posj = PointPos::start;
-                }
-                else if ((firstStartPoint - secondEndPoint).Length() < Precision::Confusion()) {
-                    create = true;
-                    posi = PointPos::start;
-                    posj = PointPos::end;
-                }
-                else if ((firstEndPoint - secondStartPoint).Length() < Precision::Confusion()) {
-                    create = true;
-                    posi = PointPos::end;
-                    posj = PointPos::start;
-                }
-                else if ((firstEndPoint - secondEndPoint).Length() < Precision::Confusion()) {
-                    create = true;
-                    posi = PointPos::end;
-                    posj = PointPos::end;
-                }
-
-                if (create) {
-                    bool tangent
-                        = needTangent(listOfOffsetGeoIds[i], listOfOffsetGeoIds[j], posi, posj);
-                    stream << "conList.append(Sketcher.Constraint('"
-                           << (tangent ? "Tangent" : "Coincident");
-                    stream << "'," << listOfOffsetGeoIds[i] << "," << static_cast<int>(posi) << ", "
-                           << listOfOffsetGeoIds[j] << "," << static_cast<int>(posj) << "))\n";
-                }
+        // A non periodic B-spline whose ends meet (an offset cut at a single cusp) is closed.
+        for (int geoId : listOfOffsetGeoIds) {
+            const Part::Geometry* geo = sketchgui->getSketchObject()->getGeometry(geoId);
+            Base::Vector3d startPoint, endPoint;
+            if (isBSplineCurve(*geo) && !static_cast<const Part::GeomBSplineCurve*>(geo)->isPeriodic()
+                && getFirstSecondPoints(geoId, startPoint, endPoint)
+                && (startPoint - endPoint).Length() < Precision::Confusion()) {
+                stream << "conList.append(Sketcher.Constraint('Coincident'," << geoId << ","
+                       << static_cast<int>(PointPos::start) << ", " << geoId << ","
+                       << static_cast<int>(PointPos::end) << "))\n";
             }
         }
 
@@ -580,8 +1435,9 @@ private:
 
         vCCO = generatevCC(listOfOffsetGeoIds);
 
-        int geoIdCandidate1 {};
-        int geoIdCandidate2 {};
+        // Stay undefined if no curve gets a construction line (e.g. offsets of B-splines).
+        int geoIdCandidate1 = GeoEnum::GeoUndef;
+        int geoIdCandidate2 = GeoEnum::GeoUndef;
 
         int newCurveCounter = 0;
         int prevCurveCounter = 0;
@@ -858,7 +1714,7 @@ private:
             newLinesStream << "del conList2\n";
             Gui::Command::doCommand(Gui::Command::Doc, newLinesStream.str().c_str());
         }
-        else {
+        else if (geoIdCandidate1 != GeoEnum::GeoUndef) {
             // If there is a single construction line, then its not needed.
             const Part::Geometry* geo = Obj->getGeometry(geoIdCandidate1);
 
@@ -876,7 +1732,7 @@ private:
                     stream << "conList.append(Sketcher.Constraint('Distance'," << geoIdCandidate1
                            << ", 1," << geoIdCandidate2 << ", 1, " << fabs(offsetLength) << "))\n";
                 }
-                else if (isLineSegment(*geo2)) {
+                else if (isLineSegment(*geo2) || isBSplineCurve(*geo2)) {
                     stream << "conList.append(Sketcher.Constraint('Distance'," << geoIdCandidate1
                            << ", 3," << geoIdCandidate1 << ", 1, " << fabs(offsetLength) << "))\n";
                 }
@@ -897,7 +1753,9 @@ private:
         for (auto geoId : listOfGeo) {
             std::vector<int> vecOfGeoIds;
             const Part::Geometry* geo = Obj->getGeometry(geoId);
-            if (isCircle(*geo) || isEllipse(*geo)) {
+            if (isCircle(*geo) || isEllipse(*geo)
+                || (isBSplineCurve(*geo)
+                    && static_cast<const Part::GeomBSplineCurve*>(geo)->isPeriodic())) {
                 vecOfGeoIds.push_back(geoId);
                 vcc.push_back(vecOfGeoIds);
                 continue;

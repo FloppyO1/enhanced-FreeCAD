@@ -2477,13 +2477,12 @@ void CmdSketcherOffset::activated(int iMsg)
 
             const Part::Geometry* geo = Obj->getGeometry(geoId);
             if (!isPoint(*geo)
-                && !isBSplineCurve(*geo)
                 && !isEllipse(*geo)
                 && !isArcOfEllipse(*geo)
                 && !isArcOfHyperbola(*geo)
                 && !isArcOfParabola(*geo)
                 && !GeometryFacade::isInternalAligned(geo)) {
-                // Currently ellipse/parabola/hyperbola/bspline are not handled correctly.
+                // Currently ellipse/parabola/hyperbola are not handled correctly.
                 // Occ engine gives offset of those as set of lines and arcs and does not seem to work consistently.
                 listOfGeoIds.push_back(geoId);
             }
@@ -2497,7 +2496,7 @@ void CmdSketcherOffset::activated(int iMsg)
         getSelection().clearSelection();
         Gui::NotifyUserError(Obj,
             QT_TRANSLATE_NOOP("Notifications", "Invalid selection"),
-            QT_TRANSLATE_NOOP("Notifications", "Selection has no valid geometries. B-splines and points are not supported yet."));
+            QT_TRANSLATE_NOOP("Notifications", "Selection has no valid geometries. Points, ellipses, and arcs of ellipses, hyperbolas, or parabolas are not supported yet."));
     }
 }
 
