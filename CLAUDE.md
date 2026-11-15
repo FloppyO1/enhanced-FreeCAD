@@ -18,6 +18,13 @@ volta), verifica tu i risultati e tiene aggiornato `STATO.md`. Nei brief per que
 ricorda: build con `build-freecad.bat noupdate`, un solo job di compilazione alla volta
 (la build usa molta RAM), nessun processo lasciato appeso, e nessun commit da parte degli agenti.
 
+## Branch principale: `personal`
+
+`personal` è il branch principale del fork: contiene tutte le modifiche personali ed è quello che
+si compila per l'uso quotidiano. `main` serve solo a seguire il repository ufficiale. I nuovi
+branch delle funzionalità partono **sempre** da `personal`, mai da `main`. Anche le modifiche
+ufficiali, una volta portate in `main`, vanno poi unite in `personal` con `git merge main`.
+
 ## Prima di ogni nuova funzionalità: chiedere se allineare al main ufficiale
 
 Prima di iniziare a lavorare su una richiesta di nuova funzionalità, chiedi sempre se si vuole
@@ -31,10 +38,11 @@ Se la risposta è sì:
 2. Aggiorna `main` locale solo in fast-forward: `git switch main`, poi
    `git merge --ff-only origin/main`. Se il fast-forward non è possibile, fermati e spiega perché.
 3. Pubblica il `main` aggiornato sul fork: `git push fork main`.
-4. Crea il branch della nuova funzionalità a partire dal `main` aggiornato.
+4. Unisci il `main` aggiornato in `personal` (`git switch personal`, poi `git merge main`) e crea
+   il branch della nuova funzionalità a partire da `personal`.
 5. Per i branch di funzionalità già esistenti chiedi se vanno aggiornati anche loro. Preferisci
    `git merge main` al rebase, perché i branch sono già pubblicati e il rebase richiederebbe un
    force push. Risolvi i conflitti solo spiegandoli prima.
 6. Ricorda che dopo l'allineamento serve ricompilare FreeCAD (la build è più lunga del solito).
 
-Se la risposta è no, crea il branch della nuova funzionalità dal `main` attuale senza aggiornarlo.
+Se la risposta è no, crea il branch della nuova funzionalità da `personal` senza aggiornare `main`.
